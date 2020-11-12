@@ -1,1 +1,1 @@
-## SigrokWEB an webinterface for [Sigrok](https://sigrok.org/)
+### [Sigrok](https://sigrok.org/) webinterface
