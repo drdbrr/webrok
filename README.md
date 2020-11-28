@@ -1,1 +1,1 @@
-### [Sigrok](https://sigrok.org/) webinterface
+Sigrok web client server
