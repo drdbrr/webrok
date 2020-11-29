@@ -1,5 +1,6 @@
 fastapi
 python-multipart 
 uvicorn
+uvloop
 starlette==0.13.6
 websockets
