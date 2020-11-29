@@ -1,3 +1,4 @@
 fastapi
 python-multipart 
-starlette-graphql
+uvicorn
+starlette==0.13.6
