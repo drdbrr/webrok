@@ -7,6 +7,11 @@ from graphql import GraphQLError
 #---------API---------#
 
 #---------TYPES---------#
+
+class Samplerate(graphene.ObjectType):
+    samplerates = graphene.List(graphene.String, default_value = [])
+    samplerate = graphene.String(default_value='')
+
 class DeviceInfo(graphene.ObjectType):
     vendor = graphene.String(default_value='')
     model = graphene.String(default_value='')
@@ -39,6 +44,8 @@ class AnalogChannel(graphene.ObjectType):
     #positionY = graphene.Int()
     #lineRef = graphene.Int()
 
+
+
 class Session(graphene.ObjectType):
     id = graphene.ID()
     name = graphene.String(default_value='')
@@ -56,6 +63,14 @@ class SrQuery(graphene.ObjectType):
     session = graphene.Field(Session, id=graphene.ID(required=True)) #, devNum=graphene.Int(required=True))
     drivers = graphene.List(graphene.String, default_value = [])
     scanDevices = graphene.List(DeviceInfo, id=graphene.ID(required=True), drv=graphene.String(required=True))
+    
+    samplerate = graphene.Field(Samplerate, id=graphene.ID(required=True))
+    
+    async def resolve_samplerate(self, info:graphene.ResolveInfo, id):
+        proc = info.context['srmng'].get_by_id(id)
+        data = proc.get_samplerate()
+        print(data)
+        return Samplerate(**data)
     
     async def resolve_scanDevices(self, info:graphene.ResolveInfo, id, drv):
         proc = info.context['srmng'].get_by_id(id)

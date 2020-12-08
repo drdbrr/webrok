@@ -42,8 +42,8 @@ class SrProcess(Process):
         
         self._session_param = {
                 'sourcename':None,
-                'samplerate':None,
-                'samplerates':None,
+                'samplerate':'',
+                'samplerates':[],
                 'sample':None,
                 'samples':None,
                 'logic':[],
@@ -87,6 +87,11 @@ class SrProcess(Process):
             
     #NOTE: Sigrok API
     #GET:
+    def get_samplerate(self):
+        print(f"{bcolors.WARNING}CLI get: samplerate{bcolors.ENDC}")
+        response = {'samplerates': self._session_param['samplerates'], 'samplerate': self._session_param['samplerate'] }
+        self.client_pipe.send(response)
+    
     def get_drivers(self):
         print(f"{bcolors.WARNING}CLI get: drivers_list{bcolors.ENDC}")
         self._driver = None
@@ -266,6 +271,10 @@ class SrProcessConnection:
         self._positions = list( [0] * 8)
         self._ranges = list( [0] * 8)
         logger.info(f"{bcolors.WARNING}SR pid: %s{bcolors.ENDC}", self.sigrok.pid)
+        
+    def get_samplerate(self):
+        data = self.runcmd('get_samplerate')
+        return data
         
     def select_samplerate(self, smp):
         res = self.runcmd('set_samplerate', smp)
