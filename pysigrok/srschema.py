@@ -8,6 +8,10 @@ from graphql import GraphQLError
 
 #---------TYPES---------#
 
+class Sample(graphene.ObjectType):
+    samples = graphene.List(graphene.String, default_value = [])
+    sample = graphene.String(default_value='')
+
 class Samplerate(graphene.ObjectType):
     samplerates = graphene.List(graphene.String, default_value = [])
     samplerate = graphene.String(default_value='')
@@ -63,8 +67,15 @@ class SrQuery(graphene.ObjectType):
     session = graphene.Field(Session, id=graphene.ID(required=True)) #, devNum=graphene.Int(required=True))
     drivers = graphene.List(graphene.String, default_value = [])
     scanDevices = graphene.List(DeviceInfo, id=graphene.ID(required=True), drv=graphene.String(required=True))
-    
     samplerate = graphene.Field(Samplerate, id=graphene.ID(required=True))
+    
+    sample = graphene.Field(Sample, id=graphene.ID(required=True))
+    
+    async def resolve_sample(self, info:graphene.ResolveInfo, id):
+        proc = info.context['srmng'].get_by_id(id)
+        data = proc.get_sample()
+        print(data)
+        return Sample(**data)
     
     async def resolve_samplerate(self, info:graphene.ResolveInfo, id):
         proc = info.context['srmng'].get_by_id(id)
