@@ -48,8 +48,6 @@ class AnalogChannel(graphene.ObjectType):
     #positionY = graphene.Int()
     #lineRef = graphene.Int()
 
-
-
 class Session(graphene.ObjectType):
     id = graphene.ID()
     name = graphene.String(default_value='')
@@ -74,22 +72,17 @@ class SrQuery(graphene.ObjectType):
     async def resolve_sample(self, info:graphene.ResolveInfo, id):
         proc = info.context['srmng'].get_by_id(id)
         data = proc.get_sample()
-        print(data)
         return Sample(**data)
     
     async def resolve_samplerate(self, info:graphene.ResolveInfo, id):
         proc = info.context['srmng'].get_by_id(id)
         data = proc.get_samplerate()
-        print(data)
         return Samplerate(**data)
     
     async def resolve_scanDevices(self, info:graphene.ResolveInfo, id, drv):
         proc = info.context['srmng'].get_by_id(id)
-        data = proc.scan_devices(drv)#runcmd('get_scan', drv)
-        #result = []
-        #for item in data:
-            #result.append(DeviceInfo(vendor = item['vendor'], model = item['model'], driverName = item['driverName'], connectionId = item['connectionId']))
-        return [ DeviceInfo(**item) for item in data ]#result
+        data = proc.scan_devices(drv)
+        return [ DeviceInfo(**item) for item in data ]
     
     async def resolve_drivers(self, info:graphene.ResolveInfo):
         try:
@@ -105,8 +98,6 @@ class SrQuery(graphene.ObjectType):
     async def resolve_session(self, info:graphene.ResolveInfo, id):
         proc = info.context['srmng'].get_by_id(id)
         data = proc.get_params()
-        #print('DATA:', data)
-        #data['logic'] = [LogicChannel(name = 'L1')]
         return Session(**data)
 
 #---------MUTATIONS---------#
@@ -121,8 +112,7 @@ class SelectDevice(graphene.Mutation):
         try:
             proc = info.context['srmng'].get_by_id(id)
             data = proc.select_device(devNum)
-            #print('data', data)
-            return Session(**data)#(id=id, name=proc.name, sourcename=proc.sourcename)
+            return Session(**data)
         except:
             raise GraphQLError('Error selecting device')
 
