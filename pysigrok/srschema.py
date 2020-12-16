@@ -22,52 +22,63 @@ class DeviceInfo(graphene.ObjectType):
     driverName = graphene.String(default_value='')
     connectionId = graphene.String(default_value='')
     
-class LogicChannel(graphene.ObjectType):
-    name = graphene.String()
-    #text = graphene.String()
-    #type = graphene.String()
-    #enabled = graphene.Int()
-    #index = graphene.Int()
-    #visible = graphene.Int()
-    #traceHeight = graphene.Int()
-    #positionY = graphene.Int()
-    #pos = graphene.Int()
-    #lineRef = graphene.Int()
-    
-class AnalogChannel(graphene.ObjectType):
-    name = graphene.String()
-    #text = graphene.String()
-    #type = graphene.String()
-    #enabled = graphene.Int()
-    #index = graphene.Int()
-    #visible = graphene.Int()
-    #divHeight = graphene.Int()
-    #negDivs = graphene.Int()
-    #posDivs = graphene.Int()
-    #divResolution = graphene.Int()
-    #positionY = graphene.Int()
-    #lineRef = graphene.Int()
-
 class Session(graphene.ObjectType):
     id = graphene.ID()
     name = graphene.String(default_value='')
     sourcename = graphene.String(default_value='')
-    samplerate = graphene.String(default_value ='')
-    samplerates = graphene.List(graphene.String, default_value = [])
-    sample = graphene.String(default_value = '')
-    samples = graphene.List(graphene.String, default_value = [])
-    logic = graphene.List(LogicChannel, default_value = [])
-    analog = graphene.List(AnalogChannel, default_value = [])
+    config = graphene.List(graphene.NonNull(graphene.String))
+    channels = graphene.List(graphene.NonNull(graphene.String))
+
+class LogicChannel(graphene.ObjectType):
+    name = graphene.String()
+    text = graphene.String()
+    color = graphene.String()
+    visible = graphene.Boolean(default_value=True)
+    #index = graphene.Int()
+    traceHeight = graphene.Int(default_value=34)
+    
+class AnalogChannel(graphene.ObjectType):
+    name = graphene.String()
+    text = graphene.String()
+    color = graphene.String()
+    visible = graphene.Boolean(default_value=True)
+    #index = graphene.Int()
+    pVertDivs = graphene.Int(default_value=1)
+    nVertDivs = graphene.Int(default_value=1)
+    divHeight = graphene.Int(default_value=50)
+    vRes = graphene.Float(default_value=20.0)
+    autoranging = graphene.Boolean(default_value=True)
+    conversion = graphene.String(default_value='')
+    convThres = graphene.String(default_value='')
+    showTraces = graphene.String(default_value='')
+    
+class Channels(graphene.ObjectType):
+    logic = graphene.List(LogicChannel)
+    analog = graphene.List(AnalogChannel)
 
 #---------QUERIES---------#
 class SrQuery(graphene.ObjectType):
     sessions = graphene.List(Session)
-    session = graphene.Field(Session, id=graphene.ID(required=True)) #, devNum=graphene.Int(required=True))
+    session = graphene.Field(Session, id=graphene.ID(required=True))
     drivers = graphene.List(graphene.String, default_value = [])
     scanDevices = graphene.List(DeviceInfo, id=graphene.ID(required=True), drv=graphene.String(required=True))
     samplerate = graphene.Field(Samplerate, id=graphene.ID(required=True))
-    
     sample = graphene.Field(Sample, id=graphene.ID(required=True))
+    
+    getChannels = graphene.Field(Channels, id=graphene.ID(required=True))
+    
+    async def resolve_getChannels(self, info:graphene.ResolveInfo, id):
+        proc = info.context['srmng'].get_by_id(id)
+        data = proc.get_channels()
+        analog = []
+        logic=[]
+        for item in data['logic']:
+            logic.append(LogicChannel(**item))
+            
+        for item in data['analog']:
+            analog.append(AnalogChannel(**item))
+        
+        return Channels(analog=analog, logic=logic)
     
     async def resolve_sample(self, info:graphene.ResolveInfo, id):
         proc = info.context['srmng'].get_by_id(id)
@@ -97,7 +108,7 @@ class SrQuery(graphene.ObjectType):
     
     async def resolve_session(self, info:graphene.ResolveInfo, id):
         proc = info.context['srmng'].get_by_id(id)
-        data = proc.get_params()
+        data = proc.get_session()
         return Session(**data)
 
 #---------MUTATIONS---------#

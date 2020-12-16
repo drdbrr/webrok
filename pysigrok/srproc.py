@@ -21,6 +21,20 @@ class bcolors:
     ENDC = '\033[0m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
+    
+colorsArr = [
+    ['#fce94f', '#fcaf3e', '#e9b96e', '#8ae234', '#729fcf', '#ad7fa8', '#cf72c3', '#ef2929'],
+    ['#edd400', '#f57900', '#c17d11', '#73d216', '#3465a4', '#75507b', '#a33496', '#cc0000'],
+    ['#c4a000', '#ce5c00', '#8f5902', '#4e9a06', '#204a87', '#5c3566', '#87207a', '#a40000'],
+    ['#16191a', '#2e3436', '#555753', '#888a8f', '#babdb6', '#d3d7cf', '#eeeeec', '#ffffff']
+]
+
+colorsArray = [
+    '#fce94f', '#fcaf3e', '#e9b96e', '#8ae234', '#729fcf', '#ad7fa8', '#cf72c3', '#ef2929',
+    '#edd400', '#f57900', '#c17d11', '#73d216', '#3465a4', '#75507b', '#a33496', '#cc0000',
+    '#c4a000', '#ce5c00', '#8f5902', '#4e9a06', '#204a87', '#5c3566', '#87207a', '#a40000',
+    '#16191a', '#2e3436', '#555753', '#888a8f', '#babdb6', '#d3d7cf', '#eeeeec', '#ffffff'
+]
 
 class SrProcess(Process):
     """Sigrok process class"""
@@ -49,6 +63,9 @@ class SrProcess(Process):
                 'logic':[],
                 'analog':[],
             }
+        
+        self._logic_channels = []
+        self._analog_channels = []
         
     def run(self):
         self._context = Context.create()
@@ -84,25 +101,29 @@ class SrProcess(Process):
             self._pck_num = 0
             self._session.stop()
             self.ss_flag.value = 3
-            
+
     #NOTE: Sigrok API
     #GET:
+    def get_channels(self):
+        print(f"{bcolors.WARNING}CLI get: channels list{bcolors.ENDC}")
+        self.client_pipe.send({'logic':self._logic_channels, 'analog':self._analog_channels})
+
     def get_sample(self):
         print(f"{bcolors.WARNING}CLI get: sample number{bcolors.ENDC}")
         response = {'samples': self._session_param['samples'], 'sample': self._session_param['sample'] }
         self.client_pipe.send(response)
-    
+
     def get_samplerate(self):
         print(f"{bcolors.WARNING}CLI get: samplerate{bcolors.ENDC}")
         response = {'samplerates': self._session_param['samplerates'], 'samplerate': self._session_param['samplerate'] }
         self.client_pipe.send(response)
-    
+
     def get_drivers(self):
         print(f"{bcolors.WARNING}CLI get: drivers_list{bcolors.ENDC}")
         self._driver = None
         response = list(self._context.drivers.keys())
         self.client_pipe.send(response)
-        
+
     def get_scan(self, drv):
         #NOTE: scanning driver
         print(f"{bcolors.WARNING}CLI get: scan %s{bcolors.ENDC}" %drv)
@@ -114,41 +135,27 @@ class SrProcess(Process):
             for device in self._devices:
                 response.append({ 'vendor': device.vendor, 'model': device.model, 'driverName': str(device.driver.name), 'connectionId': str(device.connection_id()) })
         self.client_pipe.send(response)
+
+    def get_session(self):
+        data = []
         
-    def get_params(self):
+        chan = []
         if self._device:
-            #try:
-                #rates = self._device.config_list(ConfigKey.SAMPLERATE)
-                #print('rates_list:', rates)
-                #self._session_param['samplerates'] = rates_list
-                #analog = []
-                #logic = []
-                #self._device.config_set(ConfigKey.LIMIT_SAMPLES, 1000000)
-                #self._session_param['sample'] = int(1000000)
-                #self._session_param['samples'] = [100, 1000, 100000, 1000000]
-                #self._session_param['sourcename'] = str(self._driver.name)
-                
-                #for item in self._device.channels:
-                    #if item.type.name == 'ANALOG':
-                        #analog.append({'name': item.name })
-                    #elif item.type.name == 'LOGIC':
-                        #logic.append({'name': item.name })
-                #self._session_param['logic'] = logic
-                #self._session_param['analog'] = analog
-                #rates_list = self._device.config_list(ConfigKey.SAMPLERATE)
-                #self._session_param['samplerates'] = rates_list['samplerates']
-                #self._session_param['samplerate'] = self._device.config_get(ConfigKey.SAMPLERATE)
-            self.client_pipe.send(self._session_param)
-            #except AttributeError:
-                #print("ERRROOOOOR", AttributeError)
+            for item in self._device.config_keys():
+                data.append(str(item))
+            if 'Logic' in self._device.channel_groups:
+                chan.append('LOGIC')
+            if 'Analog' in self._device.channel_groups:
+                chan.append('ANALOG')
+            self.client_pipe.send({'id':'', 'name':'', 'sourcename':self._session_param['sourcename'],'config':data, 'channels':chan})
         else:
             self.reset_params()
-            self.client_pipe.send(self._session_param)
+            self.client_pipe.send({'id':'', 'name':'', 'sourcename':'', 'config':[], 'channels':[]})
 
     #SET:
     def reset_params(self):
         self._session_param = {
-            'sourcename':None,
+            'sourcename':'',
             'samplerate':None,
             'samplerates':None,
             'sample':None,
@@ -156,7 +163,9 @@ class SrProcess(Process):
             'logic':[],
             'analog':[],
         }
-        
+        self._analog_channels = []
+        self._logic_channels = []
+
     def gen_list(self, start, ln):
         divs = [2, 5, 10]
         values = []
@@ -166,32 +175,24 @@ class SrProcess(Process):
                 values.append(int(start * 10 / divs[j] * mult))
             mult *= 10
         return values
-    
+
     def set_device_num(self, devNum):
         self.reset_params()
         if self._device is not None:
             self._device.close()
             self._device = None
         self._device = self._devices[devNum]
-        analog=[]
-        logic=[]
+        #analog=[]
+        #logic=[]
         try:
             self._session.remove_devices()
             self._device.open()
             self._device.config_set(ConfigKey.LIMIT_SAMPLES, 500000)
             self._session.add_device(self._device)
             self._session_param['sourcename'] = self._driver.name
-            for item in self._device.channels:
-                if item.type.name == 'ANALOG':
-                    analog.append({'name': item.name })
-                elif item.type.name == 'LOGIC':
-                    logic.append({'name': item.name })
-            self._session_param['logic'] = logic
-            self._session_param['analog'] = analog
-            
             self._session_param['sample'] = self._device.config_get(ConfigKey.LIMIT_SAMPLES)
             self._session_param['samples'] = self.gen_list(100, 10)
-            
+
             rates_list = self._device.config_list(ConfigKey.SAMPLERATE)
             if 'samplerates' in rates_list.keys():
                 self._session_param['samplerates'] = rates_list['samplerates']
@@ -199,7 +200,13 @@ class SrProcess(Process):
                 values = self.gen_list(1, 8)
                 self._session_param['samplerates'] = values
             self._session_param['samplerate'] = self._device.config_get(ConfigKey.SAMPLERATE)
-            
+
+            for i, item in enumerate(self._device.channels):
+                if item.type.name == 'LOGIC':
+                    self._logic_channels.append({'name': item.name, 'text':item.name, 'color':colorsArray[i], 'visible':True, 'traceHeight':34 })
+                elif item.type.name == 'ANALOG':
+                    self._analog_channels.append({'name': item.name, 'text':item.name, 'color':colorsArray[i], 'visible':True, 'pVertDivs':1, 'nVertDivs':1, 'divHeight':50, 'vRes':20.0, 'autoranging':True, 'conversion':'', 'convThres':'', 'showTraces':'' })
+
             print(f"{bcolors.OKBLUE}Device open{bcolors.ENDC}")
             self.client_pipe.send('ok')
         except:
@@ -249,7 +256,7 @@ class SrApi:
 class SrProcessConnection:
     def __init__(self, id, name):
         self.id = id
-        self.name = name
+        self.name = name #Session name
         self.data_queue = Queue()
         
         self.client_pipe_A, self.client_pipe_B = Pipe()
@@ -277,6 +284,10 @@ class SrProcessConnection:
         self._ranges = list( [0] * 8)
         logger.info(f"{bcolors.WARNING}SR pid: %s{bcolors.ENDC}", self.sigrok.pid)
         
+    def get_channels(self):
+        data = self.runcmd('get_channels')
+        return data
+        
     def get_sample(self):
         data = self.runcmd('get_sample')
         return data
@@ -291,11 +302,10 @@ class SrProcessConnection:
     def select_sample(self, smpl):
         res = self.runcmd('set_sample', smpl)
     
-    def get_params(self):
-        data = self.runcmd('get_params')
-        #data = {'id':None, 'name':None}
-        data['id'] = self.id
-        data['name'] = self.name
+    def get_session(self):
+        data = self.runcmd('get_session')        
+        data['id'] = str(self.id)
+        data['name'] = str(self.name)
         return data
         
     def scan_devices(self, drv):
@@ -305,7 +315,7 @@ class SrProcessConnection:
     def select_device(self, devNum):
         res = self.runcmd('set_device_num', devNum)
         if res == 'ok':
-            data = self.get_params()
+            data = self.get_session()
             return data
         else:
             print('select_device error')
