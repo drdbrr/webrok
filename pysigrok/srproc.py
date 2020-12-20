@@ -205,7 +205,7 @@ class SrProcess(Process):
                 if item.type.name == 'LOGIC':
                     self._logic_channels.append({'name': item.name, 'text':item.name, 'color':colorsArray[i], 'visible':True, 'traceHeight':34 })
                 elif item.type.name == 'ANALOG':
-                    self._analog_channels.append({'name': item.name, 'text':item.name, 'color':colorsArray[i], 'visible':True, 'pVertDivs':1, 'nVertDivs':1, 'divHeight':50, 'vRes':20.0, 'autoranging':True, 'conversion':'', 'convThres':'', 'showTraces':'' })
+                    self._analog_channels.append({'name': item.name, 'text':item.name, 'color':colorsArray[i], 'visible':True, 'pVertDivs':1, 'nVertDivs':1, 'divHeight':34, 'vRes':20.0, 'autoranging':True, 'conversion':'', 'convThres':'', 'showTraces':'' })
 
             print(f"{bcolors.OKBLUE}Device open{bcolors.ENDC}")
             self.client_pipe.send('ok')
