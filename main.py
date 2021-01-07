@@ -36,8 +36,6 @@ async def startup_event():
     except:
         print('ERROR Starting')
 
-#<link rel="icon" type="image/png" href="dist/favicon.ico" sizes="16x16" />
-
 @app.get("/", include_in_schema=False, response_class=HTMLResponse)
 async def root():
     return """
@@ -58,24 +56,24 @@ async def root():
 class SrWsSocket(WebSocketEndpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        #self.proc = None
+        encoding = 'json'
+        self.proc = None
         
     async def on_connect(self, websocket):
         logger.info(f"{bcolors.WARNING}WS connect{bcolors.ENDC}")
         await websocket.accept()
-        #data = await websocket.receive_json()
-        #pid = data['id']
-        #self.proc = srProcessManager.get_by_pid(pid)
-        #self.proc.ws_client = websocket
-        #print('SELF:\n', self.scope.keys())
-        #logger.info(f"{bcolors.WARNING}WS accepted pid: %s {bcolors.ENDC}", pid)
+        data = await websocket.receive_json()
+        id = data['id']
+        self.proc = srProcessManager.get_by_id(id)
+        self.proc.ws_client = websocket
+        logger.info(f"{bcolors.WARNING}WS accepted id: %s {bcolors.ENDC}", id)
         
     async def on_receive(self, websocket, data):
         data = json.loads(data)
-        print('WS data:', data)
+        print('WS data:', data, ' ', websocket.encoding)
         
         logger.debug(f'{bcolors.WARNING}WS data: %s{bcolors.ENDC}', data)
-        #await self.proc.update_control_data(data)
+        await self.proc.update_control_data(data)
         
     async def on_disconnect(self, websocket, close_code):
         #srProcessManager.delete_session(self.proc.sigrok.pid)

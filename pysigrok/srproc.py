@@ -8,6 +8,8 @@ import os, signal, time, sys, io, itertools, zipfile, configparser
 import traceback
 from collections import deque, defaultdict
 
+import threading
+
 from fastapi.logger import logger
 
 from uuid import uuid4
@@ -39,7 +41,7 @@ colorsArray = [
 class SrProcess(Process):
     """Sigrok process class"""
     def __init__(self, client_pipe, queue, ss_flag, **kwargs):
-        super(Process, self).__init__(**kwargs)
+        super(Process, self).__init__(daemon=True , **kwargs)
         self.ss_flag = ss_flag
         self._context = None
         self._session = None
@@ -83,7 +85,10 @@ class SrProcess(Process):
     def _datafeed_in_callback(self, device, packet):
         if str(packet.type) == 'LOGIC':
             self._pck_num += 1
+            
             self.data_queue.put(packet.payload.data)
+            
+            #print(self.data_queue)
             #print(packet.payload.data.dtype)
             #print(f"{bcolors.WARNING}LOGIC: %s{bcolors.ENDC}" %packet.payload.data)
             
@@ -147,10 +152,10 @@ class SrProcess(Process):
                 chan.append('LOGIC')
             if 'Analog' in self._device.channel_groups:
                 chan.append('ANALOG')
-            self.client_pipe.send({'id':'', 'name':'', 'sourcename':self._session_param['sourcename'],'config':data, 'channels':chan})
+            self.client_pipe.send({'id':'', 'name':'', 'type':'device', 'sourcename':self._session_param['sourcename'],'config':data, 'channels':chan})
         else:
             self.reset_params()
-            self.client_pipe.send({'id':'', 'name':'', 'sourcename':'', 'config':[], 'channels':[]})
+            self.client_pipe.send({'id':'', 'name':'', 'sourcename':'', 'type':'', 'config':[], 'channels':[]})
 
     #SET:
     def reset_params(self):
@@ -403,53 +408,42 @@ class SrProcessConnection:
             self.sigrok.join()
             self.sigrok.close()
         
-    async def data_task_coro(self):
-        #logger.info(f"{bcolors.WARNING}Start data_task{bcolors.ENDC}")
-        print(f"{bcolors.OKBLUE}Start data_task{bcolors.ENDC}")
-        while True:
-            while not self.data_queue.empty():
-                data = self.data_queue.get()
-                self.data.append(data)
-                self._has_data += 1
-            else:
-                await asyncio.sleep(0.1)
-        
     async def ws_task_coro(self):
         #logger.info(f"{bcolors.WARNING}Start ws_task{bcolors.ENDC}")
         print(f"{bcolors.OKBLUE}Start ws_task{bcolors.ENDC}")
         pckNum = 0
         while True:
             if self.ws_client:
-                if self._mesh_width < self._displayWidth and self._has_data:
-                    mesh_data = {
-                        'D0':{'data':[], 'range':[0, 0], 'pos':0},
-                        'D1':{'data':[], 'range':[0, 0], 'pos':0},
-                        'D2':{'data':[], 'range':[0, 0], 'pos':0},
-                        'D3':{'data':[], 'range':[0, 0], 'pos':0},
-                        'D4':{'data':[], 'range':[0, 0], 'pos':0},
-                        'D5':{'data':[], 'range':[0, 0], 'pos':0},
-                        'D6':{'data':[], 'range':[0, 0], 'pos':0},
-                        'D7':{'data':[], 'range':[0, 0], 'pos':0}
-                    }
+                #if self._mesh_width < self._displayWidth and self._has_data:
+                    #mesh_data = {
+                        #'D0':{'data':[], 'range':[0, 0], 'pos':0},
+                        #'D1':{'data':[], 'range':[0, 0], 'pos':0},
+                        #'D2':{'data':[], 'range':[0, 0], 'pos':0},
+                        #'D3':{'data':[], 'range':[0, 0], 'pos':0},
+                        #'D4':{'data':[], 'range':[0, 0], 'pos':0},
+                        #'D5':{'data':[], 'range':[0, 0], 'pos':0},
+                        #'D6':{'data':[], 'range':[0, 0], 'pos':0},
+                        #'D7':{'data':[], 'range':[0, 0], 'pos':0}
+                    #}
                     
-                    data = self.process_data(pckNum, pckNum + 1)
+                    #data = self.process_data(pckNum, pckNum + 1)
                     
-                    self._mesh_width = ( (pckNum * (self._pckLen * self._bitWidth)) * self._scale ) / 2
-                    for i, nm in enumerate(mesh_data):
-                        self._ranges[i] += int(len(data[nm]) / 3)
-                        mesh_data[nm]['data'] = list(data[nm])
-                        mesh_data[nm]['range'][1] = self._ranges[i]
-                        mesh_data[nm]['pos'] = self._positions[i]
-                        self._positions[i] += len(data[nm])
-                    await self.ws_client.send_json({ 'type':'data', 'data':mesh_data })
-                    pckNum += 1
-                    self._has_data -= 1
+                    #self._mesh_width = ( (pckNum * (self._pckLen * self._bitWidth)) * self._scale ) / 2
+                    #for i, nm in enumerate(mesh_data):
+                        #self._ranges[i] += int(len(data[nm]) / 3)
+                        #mesh_data[nm]['data'] = list(data[nm])
+                        #mesh_data[nm]['range'][1] = self._ranges[i]
+                        #mesh_data[nm]['pos'] = self._positions[i]
+                        #self._positions[i] += len(data[nm])
+                    #await self.ws_client.send_json({ 'type':'data', 'data':mesh_data })
+                    #pckNum += 1
+                    #self._has_data -= 1
                 
             #END PACKET/ERROR SESSION
                 if self.ss_flag.value == 3:
                     self.ss_flag.value = 0
                     await self.ws_client.send_json({ 'type':'config', 'sessionRun':False })
-            await asyncio.sleep(0.01)
+            await asyncio.sleep(0.1)
 
     #NOTE: (start, end) - packet numbers
     def process_data(self, start, end):
@@ -474,12 +468,40 @@ class SrProcessConnection:
                     packet[pckEntry][pointIndex-3] += self._bitWidth
                 prevVal = bitVal
         return packet
+    
+dd = 0    
+
+def thread_function(name, s, dd):
+    while True:
+        dd +=1
+        time.sleep(s)
+        print(dd)
+
 
 class SrProcessManager:
     def __init__(self):
         self.loop = asyncio.get_event_loop()
         self._procs = {}
         self.ses_num = 0
+        self.data_task = self.loop.create_task(self.data_task_coro())
+        
+        x = threading.Thread(target=thread_function, args=(2, 3, dd), daemon=True)
+        #y = threading.Thread(target=thread_function, args=(1, 2, dd), daemon=True)
+        
+        x.start()
+        #y.start()
+        
+    async def data_task_coro(self):
+        print(f"{bcolors.OKBLUE}Start data_task{bcolors.ENDC}")
+        while True:
+            for proc in self._procs.values():
+                while not proc.data_queue.empty():
+                    data = proc.data_queue.get()
+                    proc.data.append(data)
+                    proc._has_data += 1
+            else:
+                await asyncio.sleep(0.1)
+
         
     def get_drivers(self):
         id = next(iter(self._procs))
@@ -495,8 +517,7 @@ class SrProcessManager:
         name = 'session' + str(self.ses_num)
         id = str(uuid4())
         proc = SrProcessConnection(id, name)
-        #proc.data_task = self.loop.create_task(proc.data_task_coro())
-        #proc.ws_task = self.loop.create_task(proc.ws_task_coro())
+        proc.ws_task = self.loop.create_task(proc.ws_task_coro())
         self._procs[id] = proc
         self.ses_num += 1
         return { 'id':id, 'name': proc.name }
@@ -509,7 +530,5 @@ class SrProcessManager:
             return None
     
     def delete_session(self, id):
-        #proc.data_task.cancel()
-        #proc.ws_task.cancel()
         logger.info(f"{bcolors.WARNING}Delete SR session{bcolors.ENDC}")
         del self._procs[id]

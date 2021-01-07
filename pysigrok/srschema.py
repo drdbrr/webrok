@@ -24,6 +24,7 @@ class DeviceInfo(graphene.ObjectType):
     
 class Session(graphene.ObjectType):
     id = graphene.ID()
+    type = graphene.String(default_value='')
     name = graphene.String(default_value='')
     sourcename = graphene.String(default_value='')
     config = graphene.List(graphene.NonNull(graphene.String))
