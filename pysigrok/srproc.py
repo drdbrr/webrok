@@ -1,10 +1,10 @@
-from multiprocessing import Process, Pipe, Queue
+from multiprocessing import Process, Pipe, Queue, shared_memory, Event
 from multiprocessing.sharedctypes import Value
 from sigrok.core.classes import *
 import numpy as np
 import asyncio
 
-import os, signal, time, sys, io, itertools, zipfile, configparser
+import os, signal, time, sys, io, itertools, zipfile, configparser, time
 import traceback
 from collections import deque, defaultdict
 
@@ -40,13 +40,15 @@ colorsArray = [
 
 class SrProcess(Process):
     """Sigrok process class"""
-    def __init__(self, client_pipe, queue, ss_flag, **kwargs):
+    def __init__(self, client_pipe, queue, ss_flag, shmn, ev, **kwargs):
         super(Process, self).__init__(daemon=True , **kwargs)
         self.ss_flag = ss_flag
         self._context = None
         self._session = None
         self.data_queue = queue
         self.client_pipe = client_pipe
+        self.shm = shared_memory.SharedMemory(shmn)
+        self.ev = ev
         
         self.response = None
         self.request = None
@@ -54,7 +56,8 @@ class SrProcess(Process):
         self._driver = None
         self._devices = None
         self._device = None
-        self._pck_num = 0
+        self._logic_pck_num = 0
+        self._analog_pck_num = 0
         
         self._session_param = {
                 'sourcename':None,
@@ -84,28 +87,39 @@ class SrProcess(Process):
             
     def _datafeed_in_callback(self, device, packet):
         if str(packet.type) == 'LOGIC':
-            self._pck_num += 1
-            
-            self.data_queue.put(packet.payload.data)
-            
-            #print(self.data_queue)
-            #print(packet.payload.data.dtype)
-            #print(f"{bcolors.WARNING}LOGIC: %s{bcolors.ENDC}" %packet.payload.data)
+            self._logic_pck_num += 1
+            #self.data_queue.put({'logic':packet.payload.data})
             
         if str(packet.type) == 'ANALOG':
-            #print(f"{bcolors.WARNING}ANALOG: %s{bcolors.ENDC}" %packet.payload.data)
-            pass
+            #print(packet.payload.data)
+            self._analog_pck_num += 1
+            
+            ln = len(packet.payload.data.tobytes())
+            
+            self.shm.buf[:ln] = packet.payload.data.tobytes()
+            self.ev.set()
+            
+            #self.shm.buf[:5] = b'howdy'#packet.payload.data.tobytes()
+            #print(packet.payload.data.tobytes())
+            #self.ev.set()
+            #self.data_queue.put({'analog':packet.payload.data})
             
         if str(packet.type) == 'END':
             print(f"{bcolors.WARNING}END sampling{bcolors.ENDC}")
-            self._pck_num = 0
             self.ss_flag.value = 3
+            print('analog packets:', self._analog_pck_num)
+            print('logic packets:', self._logic_pck_num)
+            
+            self._analog_pck_num = 0
+            self._logic_pck_num = 0
             
         if self.ss_flag.value == 0 and self._session.is_running():
             print(f"{bcolors.WARNING}STOP sampling{bcolors.ENDC}")
-            self._pck_num = 0
+            #self._pck_num = 0
             self._session.stop()
             self.ss_flag.value = 3
+            self._analog_pck_num = 0
+            self._logic_pck_num = 0
 
     #NOTE: Sigrok API
     #GET:
@@ -258,6 +272,28 @@ class SrApi:
         else:
             func()
 
+dd = 0    
+
+def thread_function(name, ev, dd, shm):
+    while True:
+        if ev.is_set():
+            #dd +=1
+            print(dd)
+            ev.clear()
+        else:
+            break
+
+dd = 0
+
+def tst(ev, shm):
+    global dd
+    while True:
+        if ev.is_set():
+            print(shm.buf)
+            dd += 1
+            print(dd)
+            ev.clear()
+
 class SrProcessConnection:
     def __init__(self, id, name):
         self.id = id
@@ -267,17 +303,27 @@ class SrProcessConnection:
         self.client_pipe_A, self.client_pipe_B = Pipe()
         self.ss_flag = Value('h', 0)
         
-        self.sigrok = SrProcess(self.client_pipe_B, self.data_queue, self.ss_flag)
+        self.shm = shared_memory.SharedMemory(create=True, size=4080)
+        
+        self.ev = Event()
+        
+        
+        self.sigrok = SrProcess(self.client_pipe_B, self.data_queue, self.ss_flag, self.shm.name, self.ev)
         self.sigrok.start()
+        
+        #self.x = threading.Thread(target=thread_function, args=(2, ev, dd, self.shm), daemon=True)
+        #self.x = threading.Thread(target=tst, args=(self.ev, self.shm), daemon=True)
+        #self.x.start()
+        
         self.ws_client = None
         self.ws_task = None
         self.data_task = None
         
-        self.data = deque()
+        self.data = {'logic':deque(), 'analog':deque()}
 
         self._displayWidth = 1680
         self._has_data = 0
-        self._x = None
+        self._x = 0
         self._scale = 1
         self._mesh_width = 1
         #self._camera_pos = 0
@@ -287,6 +333,12 @@ class SrProcessConnection:
         self._bitHeight = 50 #50 или 1
         self._positions = list( [0] * 8)
         self._ranges = list( [0] * 8)
+        
+        self.bt = 0
+        
+        self.lcnt = 0
+        self.acnt = 0
+        
         logger.info(f"{bcolors.WARNING}SR pid: %s{bcolors.ENDC}", self.sigrok.pid)
         
     def get_channels(self):
@@ -324,74 +376,7 @@ class SrProcessConnection:
             return data
         else:
             print('select_device error')
-        
-    async def start_session(self, run):
-        self.data.clear()
-        
-        #NOTE:START SESSION
-        if (run):
-            self.ss_flag.value = 1
-            request = SrApi('session_run', run)
-            self.client_pipe_A.send(request)
-            if self.client_pipe_A.poll(0.1):
-                resp = self.client_pipe_A.recv()
-                await self.ws_client.send_json({ 'type':'config', 'sessionRun':False })
-            else: await self.ws_client.send_json({ 'type':'config', 'sessionRun':True })
-        
-        #NOTE:STOP SESSION
-        else:
-            self.ss_flag.value = 0
-            await self.ws_client.send_json({ 'type':'config', 'sessionRun':False })
             
-    async def create_sr_file(self, name):
-        z = zipfile.ZipFile(name, 'w', zipfile.ZIP_DEFLATED)
-            
-    async def open_sr_file(self, zf):
-        z = None
-        data_file = None
-        config = configparser.ConfigParser()
-        try:
-            z = zipfile.ZipFile(zf)
-            config.read_string(z.read('metadata').decode('ascii'))
-            version = config.get('global', 'sigrok version').split('-')[0]
-            if version < '0.2.0':
-                raise
-        except:
-            return {'error':'Invalid file'}
-        
-        capturefile = config.get('device 1', 'capturefile')
-        for item in z.namelist():
-            if item.startswith(capturefile):
-                data_file = z.open(item)
-                
-        self.data.clear()
-        step = 0
-        while step <= data_file.tell():
-            data_file.seek(step)
-            ar = np.fromstring(data_file.read(512), dtype='uint8')
-            ar = np.expand_dims(ar, axis=1)
-            self.data.append(ar)
-            step += 512
-        z.close()
-        return {'error':''}
-        
-    async def update_control_data(self, data):
-        for key in data.keys():
-            if key == 'scale':
-                self._scale = data.get('scale')
-                self._mesh_width *= self._scale
-                #self._C = (10 / self._scale / 1000) / 2
-                
-            elif key == 'x':
-                self._x = data.get('x')
-                self._mesh_width -= self._x
-                #self._camera_pos += self._x
-                #print(self._camera_pos)
-                
-            elif key == 'session_run':
-                run = data.get('session_run')
-                await self.start_session(run)
-        
     def runcmd(self, cmd, param = None):
         request = SrApi(cmd, param)
         self.client_pipe_A.send(request)
@@ -400,13 +385,66 @@ class SrProcessConnection:
         except:
             print('error reading data')
         return data
+            
+            
+#----------------------------------------------
+
     
-    def __del__(self):
-            self.data_queue.close()
-            self.client_pipe_A.close()
-            #os.kill(self.sigrok.pid, signal.SIGINT)
-            self.sigrok.join()
-            self.sigrok.close()
+    
+    async def start_session(self, run):
+        print('Start session data collection')
+        self.data['analog'].clear()
+        self.data['logic'].clear()
+        self._has_data = 0
+        
+        self.ss_flag.value = 1
+        request = SrApi('session_run', True)
+        self.client_pipe_A.send(request)
+        if self.client_pipe_A.poll(0.1):
+            resp = self.client_pipe_A.recv()
+            await self.ws_client.send_json({ 'type':'config', 'sessionRun':False })
+        else:
+            self.bt = time.time()
+            await self.ws_client.send_json({ 'type':'config', 'sessionRun':True })
+            
+    async def stop_session(self):
+        print('Stop session data collection, deltaT:', time.time() - self.bt)
+        self.ss_flag.value = 0
+        self.data_task.cancel()
+        
+        self.data['logic'].clear()
+        self.data['analog'].clear()
+        print('self._has_data:', self._has_data)
+        
+        #print(len(self.data['logic']))
+        print(len(self.data['analog']))
+        await self.ws_client.send_json({ 'type':'config', 'sessionRun':False })
+        
+    def update_scale(self, data):
+        self._scale = data
+        print('scale:', self._scale)
+        #self._mesh_width *= self._scale
+        
+    def update_x(self, x):
+        self._x += x
+        print('self._x:', self._x)
+        #self._mesh_width -= self._x
+        
+    async def data_task_coro(self):
+        print(f"{bcolors.OKBLUE}Start data_task{bcolors.ENDC}")
+        while True:
+            while not self.data_queue.empty():
+                data = self.data_queue.get()
+                #for key in data.keys():
+                #self.data['analog'].append(data['analog'])
+                    
+                self._has_data += 1
+                await self.ws_client.send_json({ 'type':'cnt', 'pck_cnt': self._has_data})
+            else:
+                await asyncio.sleep(0.1)
+                
+                
+                
         
     async def ws_task_coro(self):
         #logger.info(f"{bcolors.WARNING}Start ws_task{bcolors.ENDC}")
@@ -442,8 +480,12 @@ class SrProcessConnection:
             #END PACKET/ERROR SESSION
                 if self.ss_flag.value == 3:
                     self.ss_flag.value = 0
-                    await self.ws_client.send_json({ 'type':'config', 'sessionRun':False })
+                    #self.data_task_coro.cancel()
+                    await self.stop_session()
+                    
             await asyncio.sleep(0.1)
+#----------------------------------------------
+
 
     #NOTE: (start, end) - packet numbers
     def process_data(self, start, end):
@@ -468,14 +510,52 @@ class SrProcessConnection:
                     packet[pckEntry][pointIndex-3] += self._bitWidth
                 prevVal = bitVal
         return packet
-    
-dd = 0    
+        
+    def __del__(self):
+            self.data_queue.close()
+            self.client_pipe_A.close()
+            #os.kill(self.sigrok.pid, signal.SIGINT)
+            self.sigrok.join()
+            self.sigrok.close()
 
-def thread_function(name, s, dd):
-    while True:
-        dd +=1
-        time.sleep(s)
-        print(dd)
+    async def create_sr_file(self, name):
+        z = zipfile.ZipFile(name, 'w', zipfile.ZIP_DEFLATED)
+            
+    async def open_sr_file(self, zf):
+        z = None
+        data_file = None
+        config = configparser.ConfigParser()
+        try:
+            z = zipfile.ZipFile(zf)
+            config.read_string(z.read('metadata').decode('ascii'))
+            version = config.get('global', 'sigrok version').split('-')[0]
+            if version < '0.2.0':
+                raise
+        except:
+            return {'error':'Invalid file'}
+        
+        capturefile = config.get('device 1', 'capturefile')
+        for item in z.namelist():
+            if item.startswith(capturefile):
+                data_file = z.open(item)
+                
+        self.data.clear()
+        step = 0
+        while step <= data_file.tell():
+            data_file.seek(step)
+            ar = np.fromstring(data_file.read(512), dtype='uint8')
+            ar = np.expand_dims(ar, axis=1)
+            self.data.append(ar)
+            step += 512
+        z.close()
+        return {'error':''}
+#_____________________________________
+    
+    
+    
+    
+
+
 
 
 class SrProcessManager:
@@ -483,24 +563,13 @@ class SrProcessManager:
         self.loop = asyncio.get_event_loop()
         self._procs = {}
         self.ses_num = 0
-        self.data_task = self.loop.create_task(self.data_task_coro())
+        #self.data_task = self.loop.create_task(self.data_task_coro())
         
-        x = threading.Thread(target=thread_function, args=(2, 3, dd), daemon=True)
+        
         #y = threading.Thread(target=thread_function, args=(1, 2, dd), daemon=True)
         
-        x.start()
+        #x.start()
         #y.start()
-        
-    async def data_task_coro(self):
-        print(f"{bcolors.OKBLUE}Start data_task{bcolors.ENDC}")
-        while True:
-            for proc in self._procs.values():
-                while not proc.data_queue.empty():
-                    data = proc.data_queue.get()
-                    proc.data.append(data)
-                    proc._has_data += 1
-            else:
-                await asyncio.sleep(0.1)
 
         
     def get_drivers(self):

@@ -4,6 +4,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.logger import logger
 from starlette.endpoints import WebSocketEndpoint
+from starlette.routing import WebSocketRoute
+from starlette.types import ASGIApp, Receive, Scope, Send
 from graphql.execution.executors.asyncio import AsyncioExecutor
 from graphene import Schema
 import uvicorn
@@ -13,6 +15,7 @@ import json
 from pysigrok.srproc import SrProcessManager
 from pysigrok.gqlapp import GraphQLAppExt
 from pysigrok.srschema import SrQuery, SrMutation
+from pysigrok.srwsendpoint import SrWsEndpoint
 
 class bcolors:
     HEADER = '\033[95m'
@@ -25,9 +28,23 @@ class bcolors:
     UNDERLINE = '\033[4m'
 
 srProcessManager = SrProcessManager()
+        
+routes=[WebSocketRoute('/srsocket', SrWsEndpoint)]
 
-app = FastAPI()
+app = FastAPI(routes=routes)
 app.mount("/dist", StaticFiles(directory="dist"), name="dist")
+
+class SrMngMiddleware:
+    def __init__(self, app: ASGIApp):
+        self._app = app
+        self.srmng = srProcessManager
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] == "websocket":
+            scope["srmng"] = self.srmng
+        await self._app(scope, receive, send)
+
+app.add_middleware(SrMngMiddleware)
 
 @app.on_event("startup")
 async def startup_event():
@@ -51,33 +68,6 @@ async def root():
         </body>
     </html>
     """
-    
-@app.websocket_route("/srsocket")
-class SrWsSocket(WebSocketEndpoint):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        encoding = 'json'
-        self.proc = None
-        
-    async def on_connect(self, websocket):
-        logger.info(f"{bcolors.WARNING}WS connect{bcolors.ENDC}")
-        await websocket.accept()
-        data = await websocket.receive_json()
-        id = data['id']
-        self.proc = srProcessManager.get_by_id(id)
-        self.proc.ws_client = websocket
-        logger.info(f"{bcolors.WARNING}WS accepted id: %s {bcolors.ENDC}", id)
-        
-    async def on_receive(self, websocket, data):
-        data = json.loads(data)
-        print('WS data:', data, ' ', websocket.encoding)
-        
-        logger.debug(f'{bcolors.WARNING}WS data: %s{bcolors.ENDC}', data)
-        await self.proc.update_control_data(data)
-        
-    async def on_disconnect(self, websocket, close_code):
-        #srProcessManager.delete_session(self.proc.sigrok.pid)
-        logger.info(f"{bcolors.WARNING}WS disconnect{bcolors.ENDC}")
 
 app.add_route("/sigrok", GraphQLAppExt(context={'srmng':srProcessManager}, graphiql=False, schema=Schema(query=SrQuery, mutation=SrMutation), executor=AsyncioExecutor()))
     
