@@ -26,14 +26,8 @@ class bcolors:
     ENDC = '\033[0m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
-
+    
 srProcessManager = SrProcessManager()
-
-        
-routes=[WebSocketRoute('/srsocket', SrWsEndpoint)]
-
-app = FastAPI(routes=routes)
-app.mount("/dist", StaticFiles(directory="dist"), name="dist")
 
 class SrMngMiddleware:
     def __init__(self, app: ASGIApp):
@@ -45,14 +39,18 @@ class SrMngMiddleware:
             scope["srmng"] = self.srmng
         await self._app(scope, receive, send)
 
+routes=[WebSocketRoute('/srsocket', SrWsEndpoint)]
+app = FastAPI(routes=routes)
+app.mount("/dist", StaticFiles(directory="dist"), name="dist")
 app.add_middleware(SrMngMiddleware)
+app.add_route("/sigrok", GraphQLAppExt(context={'srmng':srProcessManager}, graphiql=False, schema=Schema(query=SrQuery, mutation=SrMutation), executor=AsyncioExecutor()))
 
 @app.on_event("startup")
 async def startup_event():
     try:
         srProcessManager.create_session()
     except:
-        print('ERROR Starting')
+        print('App.startup: Can not create session')
 
 @app.get("/", include_in_schema=False, response_class=HTMLResponse)
 async def root():
@@ -69,8 +67,6 @@ async def root():
         </body>
     </html>
     """
-
-app.add_route("/sigrok", GraphQLAppExt(context={'srmng':srProcessManager}, graphiql=False, schema=Schema(query=SrQuery, mutation=SrMutation), executor=AsyncioExecutor()))
     
 if __name__ == "__main__":
     uvloop.install()
