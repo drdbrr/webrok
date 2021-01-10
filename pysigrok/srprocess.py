@@ -8,17 +8,7 @@ import time
 
 import numpy as np
 
-server_address = '/home/drjacka/sock_python/uds_socket'
-
 tmp_dir = '/tmp/webrok/'
-
-try:
-    os.unlink(server_address)
-except OSError:
-    if os.path.exists(server_address):
-        raise
-
-
 
 colorsArray = [
     '#fce94f', '#fcaf3e', '#e9b96e', '#8ae234', '#729fcf', '#ad7fa8', '#cf72c3', '#ef2929',
