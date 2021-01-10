@@ -78,7 +78,7 @@ class SrProcess(Process):
     def _datafeed_in_callback(self, device, packet):
         if str(packet.type) == 'LOGIC':
             self._logic_pck_num += 1
-            #self.lconn.sendall(packet.payload.data[0].tobytes())
+            self.lconn.sendall(packet.payload.data[0].tobytes())
             
         elif str(packet.type) == 'ANALOG':
             self._analog_pck_num += 1
@@ -243,7 +243,6 @@ class SrProcess(Process):
                 self.asock.accept()
                 print('asoc accepted')
             
-            #self.lsock.accept()
         except:
             print(f"{bcolors.FAIL}Device NOT open{bcolors.ENDC}")
             self.client_pipe.send(False)
