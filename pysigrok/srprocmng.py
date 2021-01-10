@@ -100,14 +100,18 @@ class SrProcessConnection:
     
     async def select_device(self, devNum):
         res = self.runcmd('set_device_num', devNum)
+        
+        loop = asyncio.get_event_loop()
+        
         if res:
             if 'LOGIC' in res:
                 print('Open lsock')
                 self.lreader, wr = await asyncio.open_unix_connection(tmp_dir + self.id + 'lsock')
-                
             if 'ANALOG' in res:
                 print('Open asock')
                 self.areader, wr = await asyncio.open_unix_connection(tmp_dir + self.id + 'asock')
+                
+                self.a_data_task = loop.create_task(self.data_handler_task(self.areader))
                 
             data = self.get_session()    
             return data
@@ -165,8 +169,9 @@ class SrProcessConnection:
             data = await reader.read(4096)
             if data:
                 self._has_data += 1
-                print('data')
-                #self.data['analog'].append(analog_data)
+                
+                #print('data')
+                self.data['analog'].append(np.frombuffer(data, dtype='float32'))
                 #await self.ws_client.send_json({ 'type':'cnt', 'pck_cnt': self._has_data})
             else:
                 break
@@ -204,6 +209,7 @@ class SrProcessConnection:
                 
             #END PACKET/ERROR SESSION
                 if self.ss_flag.value == 3:
+                    print(len(self.data['analog']))
                     await self.stop_session()
                     
             await asyncio.sleep(0.1)

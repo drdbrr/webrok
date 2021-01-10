@@ -236,15 +236,15 @@ class SrProcess(Process):
             self.client_pipe.send(self._session_param['channels'])
             
             if lswa:
-                self.lsock.accept()
+                self.lconn, addr = self.lsock.accept()
                 print('lsoc accepted')
                 
             if aswa:
-                self.asock.accept()
+                self.aconn, addr = self.asock.accept()
                 print('asoc accepted')
             
         except:
-            print(f"{bcolors.FAIL}Device NOT open{bcolors.ENDC}")
+            print(f"{bcolors.FAIL}Can NOT open device{bcolors.ENDC}")
             self.client_pipe.send(False)
         
     
