@@ -1,18 +1,18 @@
-from multiprocessing import Process, Pipe, Queue, shared_memory, Event, Value
+from multiprocessing import Process, Pipe, Queue, Event, Value
 import numpy as np
 import asyncio
 
-import os, signal, time, sys, io, itertools, zipfile, configparser, time
+import os, signal, time, sys, io, itertools, zipfile, configparser, time, array
 import traceback
 from collections import deque, defaultdict
-
-import threading
 
 from fastapi.logger import logger
 
 from uuid import uuid4
 
 from .srprocess import SrProcess
+
+tmp_dir = '/tmp/webrok/'
 
 class bcolors:
     HEADER = '\033[95m'
@@ -36,55 +36,20 @@ class SrApi:
         else:
             func()
 
-dd = 0    
-
-def thread_function(name, ev, dd, shm):
-    while True:
-        if ev.is_set():
-            #dd +=1
-            print(dd)
-            ev.clear()
-        else:
-            break
-
-dd = 0
-
-def tst(ev, shm):
-    global dd
-    while True:
-        try:
-            if ev.is_set():
-                print(shm.buf)
-                dd += 1
-                print(dd)
-                ev.clear()
-        except:
-            break
-
 class SrProcessConnection:
     def __init__(self, id, name):
         self.id = id
         self.name = name #Session name
-        self.data_queue = Queue()
         
         self.client_pipe_A, self.client_pipe_B = Pipe()
         self.ss_flag = Value('h', 0)
         
-        self.shm = shared_memory.SharedMemory(create=True, size=4080)
-        
-        self.ev = Event()
-        
-        
-        self.sigrok = SrProcess(self.client_pipe_B, self.data_queue, self.ss_flag, self.shm.name, self.ev)
+        self.sigrok = SrProcess(self.client_pipe_B, self.ss_flag, name = self.id, daemon=True)
         self.sigrok.start()
-        
-        #self.x = threading.Thread(target=thread_function, args=(2, ev, dd, self.shm), daemon=True)
-        self.x = threading.Thread(target=tst, args=(self.ev, self.shm), daemon=True)
-        #self.x.start()
         
         self.ws_client = None
         self.ws_task = None
-        self.data_task = None
+        self.a_data_task = None
         
         self.data = {'logic':deque(), 'analog':deque()}
 
@@ -102,9 +67,6 @@ class SrProcessConnection:
         self._ranges = list( [0] * 8)
         
         self.bt = 0
-        
-        self.lcnt = 0
-        self.acnt = 0
         
         logger.info(f"{bcolors.WARNING}SR pid: %s{bcolors.ENDC}", self.sigrok.pid)
         
@@ -125,24 +87,32 @@ class SrProcessConnection:
     
     def select_sample(self, smpl):
         res = self.runcmd('set_sample', smpl)
-    
-    def get_session(self):
-        data = self.runcmd('get_session')        
-        data['id'] = str(self.id)
-        data['name'] = str(self.name)
-        return data
         
     def scan_devices(self, drv):
         data = self.runcmd('get_scan', drv)
         return data
     
-    def select_device(self, devNum):
+    def get_session(self):
+        data = self.runcmd('get_session')
+        data['id'] = str(self.id)
+        data['name'] = str(self.name)
+        return data
+    
+    async def select_device(self, devNum):
         res = self.runcmd('set_device_num', devNum)
-        if res == 'ok':
-            data = self.get_session()
+        if res:
+            if 'LOGIC' in res:
+                print('Open lsock')
+                self.lreader, wr = await asyncio.open_unix_connection(tmp_dir + self.id + 'lsock')
+                
+            if 'ANALOG' in res:
+                print('Open asock')
+                self.areader, wr = await asyncio.open_unix_connection(tmp_dir + self.id + 'asock')
+                
+            data = self.get_session()    
             return data
         else:
-            print('select_device error')
+            print('Error selecting device')
             
     def runcmd(self, cmd, param = None):
         request = SrApi(cmd, param)
@@ -152,11 +122,7 @@ class SrProcessConnection:
         except:
             print('error reading data')
         return data
-            
-            
 #----------------------------------------------
-
-    
     
     async def start_session(self, run):
         print('Start session data collection')
@@ -166,6 +132,7 @@ class SrProcessConnection:
         
         self.ss_flag.value = 1
         request = SrApi('session_run', True)
+        
         self.client_pipe_A.send(request)
         if self.client_pipe_A.poll(0.1):
             resp = self.client_pipe_A.recv()
@@ -177,14 +144,9 @@ class SrProcessConnection:
     async def stop_session(self):
         print('Stop session data collection, deltaT:', time.time() - self.bt)
         self.ss_flag.value = 0
-        self.data_task.cancel()
+        #self.data['logic'].clear()
+        #self.data['analog'].clear()
         
-        self.data['logic'].clear()
-        self.data['analog'].clear()
-        print('self._has_data:', self._has_data)
-        
-        #print(len(self.data['logic']))
-        print(len(self.data['analog']))
         await self.ws_client.send_json({ 'type':'config', 'sessionRun':False })
         
     def update_scale(self, data):
@@ -197,21 +159,17 @@ class SrProcessConnection:
         print('self._x:', self._x)
         #self._mesh_width -= self._x
         
-    async def data_task_coro(self):
+    async def data_handler_task(self, reader):
         print(f"{bcolors.OKBLUE}Start data_task{bcolors.ENDC}")
         while True:
-            while not self.data_queue.empty():
-                data = self.data_queue.get()
-                #for key in data.keys():
-                #self.data['analog'].append(data['analog'])
-                    
+            data = await reader.read(4096)
+            if data:
                 self._has_data += 1
-                await self.ws_client.send_json({ 'type':'cnt', 'pck_cnt': self._has_data})
+                print('data')
+                #self.data['analog'].append(analog_data)
+                #await self.ws_client.send_json({ 'type':'cnt', 'pck_cnt': self._has_data})
             else:
-                await asyncio.sleep(0.1)
-                
-                
-                
+                break
         
     async def ws_task_coro(self):
         #logger.info(f"{bcolors.WARNING}Start ws_task{bcolors.ENDC}")
@@ -246,8 +204,6 @@ class SrProcessConnection:
                 
             #END PACKET/ERROR SESSION
                 if self.ss_flag.value == 3:
-                    self.ss_flag.value = 0
-                    #self.data_task_coro.cancel()
                     await self.stop_session()
                     
             await asyncio.sleep(0.1)
@@ -279,8 +235,9 @@ class SrProcessConnection:
         return packet
         
     def __del__(self):
-            self.data_queue.close()
             self.client_pipe_A.close()
+            self.l_data_task.cancel()
+            self.a_data_task.cancel()
             #os.kill(self.sigrok.pid, signal.SIGINT)
             self.sigrok.join()
             self.sigrok.close()
@@ -317,13 +274,6 @@ class SrProcessConnection:
         z.close()
         return {'error':''}
 #_____________________________________
-    
-    
-    
-    
-
-
-
 
 class SrProcessManager:
     def __init__(self):
@@ -331,14 +281,7 @@ class SrProcessManager:
         self._procs = {}
         self.ses_num = 0
         #self.data_task = self.loop.create_task(self.data_task_coro())
-        
-        
-        #y = threading.Thread(target=thread_function, args=(1, 2, dd), daemon=True)
-        
-        #x.start()
-        #y.start()
 
-        
     def get_drivers(self):
         id = next(iter(self._procs))
         proc = self._procs[id]

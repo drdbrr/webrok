@@ -12,10 +12,14 @@ import uvicorn
 import uvloop
 import json
 
-from pysigrok.srproc import SrProcessManager
+from pysigrok.srprocmng import SrProcessManager
 from pysigrok.gqlapp import GraphQLAppExt
 from pysigrok.srschema import SrQuery, SrMutation
 from pysigrok.srwsendpoint import SrWsEndpoint
+
+import os, shutil
+
+tmp_dir = '/tmp/webrok/'
 
 class bcolors:
     HEADER = '\033[95m'
@@ -48,9 +52,18 @@ app.add_route("/sigrok", GraphQLAppExt(context={'srmng':srProcessManager}, graph
 @app.on_event("startup")
 async def startup_event():
     try:
+        if not os.path.isdir(tmp_dir):
+            os.mkdir(tmp_dir)
         srProcessManager.create_session()
     except:
         print('App.startup: Can not create session')
+        
+@app.on_event("shutdown")
+async def shutdown_event():
+    try:
+        shutil.rmtree(tmp_dir)
+    except:
+        print('App.shutdown error')
 
 @app.get("/", include_in_schema=False, response_class=HTMLResponse)
 async def root():

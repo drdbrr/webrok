@@ -40,9 +40,8 @@ class SrWsEndpoint(WebSocketEndpoint):
                 self.proc.update_x(data.get('x'))
                 
             elif key == 'session_run' and data.get('session_run'):
-                
                 await self.proc.start_session(data.get('session_run'))
-                self.proc.data_task = self.srmng.loop.create_task(self.proc.data_task_coro())
+                #self.proc.a_data_task = self.srmng.loop.create_task(self.proc.adata_handler_task())
             
             elif key == 'session_run' and not data.get('session_run'):
                 #self.proc.data_task.cancel()

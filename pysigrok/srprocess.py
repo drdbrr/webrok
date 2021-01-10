@@ -1,12 +1,24 @@
 from multiprocessing import Process, shared_memory
 from sigrok.core.classes import *
 
-colorsArr = [
-    ['#fce94f', '#fcaf3e', '#e9b96e', '#8ae234', '#729fcf', '#ad7fa8', '#cf72c3', '#ef2929'],
-    ['#edd400', '#f57900', '#c17d11', '#73d216', '#3465a4', '#75507b', '#a33496', '#cc0000'],
-    ['#c4a000', '#ce5c00', '#8f5902', '#4e9a06', '#204a87', '#5c3566', '#87207a', '#a40000'],
-    ['#16191a', '#2e3436', '#555753', '#888a8f', '#babdb6', '#d3d7cf', '#eeeeec', '#ffffff']
-]
+import socket
+import sys
+import os
+import time
+
+import numpy as np
+
+server_address = '/home/drjacka/sock_python/uds_socket'
+
+tmp_dir = '/tmp/webrok/'
+
+try:
+    os.unlink(server_address)
+except OSError:
+    if os.path.exists(server_address):
+        raise
+
+
 
 colorsArray = [
     '#fce94f', '#fcaf3e', '#e9b96e', '#8ae234', '#729fcf', '#ad7fa8', '#cf72c3', '#ef2929',
@@ -27,15 +39,12 @@ class bcolors:
 
 class SrProcess(Process):
     """Sigrok process class"""
-    def __init__(self, client_pipe, queue, ss_flag, shmn, ev, **kwargs):
-        super(Process, self).__init__(daemon=True , **kwargs)
+    def __init__(self, client_pipe, ss_flag, **kwargs):
+        super(Process, self).__init__(**kwargs)
         self.ss_flag = ss_flag
         self._context = None
         self._session = None
-        self.data_queue = queue
         self.client_pipe = client_pipe
-        self.shm = shared_memory.SharedMemory(shmn)
-        self.ev = ev
         
         self.response = None
         self.request = None
@@ -47,17 +56,23 @@ class SrProcess(Process):
         self._analog_pck_num = 0
         
         self._session_param = {
-                'sourcename':None,
-                'samplerate':'',
-                'samplerates':[],
-                'sample':'',
-                'samples':[],
-                'logic':[],
-                'analog':[],
-            }
+            'id':'',
+            'name':'',
+            'type':'',
+            'sourcename':'',
+            'samplerate':'',
+            'samplerates':[],
+            'sample':'',
+            'samples':[],
+            'config':[],
+            'channels':[]
+        }
         
         self._logic_channels = []
         self._analog_channels = []
+        
+        self.lsock = None
+        self.asock = None
         
     def run(self):
         self._context = Context.create()
@@ -69,29 +84,17 @@ class SrProcess(Process):
                 self._cmd.run(self)
             except:
                 break
-            #if not self._cmd:
-                #break
             
     def _datafeed_in_callback(self, device, packet):
         if str(packet.type) == 'LOGIC':
             self._logic_pck_num += 1
-            #self.data_queue.put({'logic':packet.payload.data})
+            #self.lconn.sendall(packet.payload.data[0].tobytes())
             
-        if str(packet.type) == 'ANALOG':
-            #print(packet.payload.data)
+        elif str(packet.type) == 'ANALOG':
             self._analog_pck_num += 1
-            
-            ln = len(packet.payload.data.tobytes())
-            
-            self.shm.buf[:ln] = packet.payload.data.tobytes()
-            self.ev.set()
-            
-            #self.shm.buf[:5] = b'howdy'#packet.payload.data.tobytes()
-            #print(packet.payload.data.tobytes())
-            #self.ev.set()
-            #self.data_queue.put({'analog':packet.payload.data})
-            
-        if str(packet.type) == 'END':
+            self.aconn.sendall(packet.payload.data[0].tobytes())
+
+        elif str(packet.type) == 'END':
             print(f"{bcolors.WARNING}END sampling{bcolors.ENDC}")
             self.ss_flag.value = 3
             print('analog packets:', self._analog_pck_num)
@@ -100,9 +103,8 @@ class SrProcess(Process):
             self._analog_pck_num = 0
             self._logic_pck_num = 0
             
-        if self.ss_flag.value == 0 and self._session.is_running():
+        elif self.ss_flag.value == 0 and self._session.is_running():
             print(f"{bcolors.WARNING}STOP sampling{bcolors.ENDC}")
-            #self._pck_num = 0
             self._session.stop()
             self.ss_flag.value = 3
             self._analog_pck_num = 0
@@ -136,6 +138,7 @@ class SrProcess(Process):
         self._driver = None
         self._driver = self._context.drivers[drv]
         response = []
+        
         if self._driver is not None:
             self._devices = self._driver.scan()
             for device in self._devices:
@@ -143,34 +146,41 @@ class SrProcess(Process):
         self.client_pipe.send(response)
 
     def get_session(self):
-        data = []
-        
-        chan = []
         if self._device:
-            for item in self._device.config_keys():
-                data.append(str(item))
-            if 'Logic' in self._device.channel_groups:
-                chan.append('LOGIC')
-            if 'Analog' in self._device.channel_groups:
-                chan.append('ANALOG')
-            self.client_pipe.send({'id':'', 'name':'', 'type':'device', 'sourcename':self._session_param['sourcename'],'config':data, 'channels':chan})
+            self.client_pipe.send({'id':'', 'name':'', 'type':'device', 'sourcename':self._session_param['sourcename'],'config':self._session_param['config'], 'channels':self._session_param['channels']})
         else:
             self.reset_params()
-            self.client_pipe.send({'id':'', 'name':'', 'sourcename':'', 'type':'', 'config':[], 'channels':[]})
+            self.client_pipe.send({'id':'', 'name':'', 'type':'', 'sourcename':'', 'config':[], 'channels':[]})
 
     #SET:
     def reset_params(self):
         self._session_param = {
+            'id':'',
+            'name':'',
+            'type':'',
             'sourcename':'',
-            'samplerate':None,
-            'samplerates':None,
-            'sample':None,
-            'samples':None,
-            'logic':[],
-            'analog':[],
+            'samplerate':'',
+            'samplerates':[],
+            'sample':'',
+            'samples':[],
+            'config':[],
+            'channels':[]
         }
         self._analog_channels = []
         self._logic_channels = []
+        
+        
+        if self._device is not None:
+            self._device.close()
+            self._device = None
+        
+        if self.asock is not None:
+            self.asock.close()
+            self.asock = None
+            
+        if self.lsock is not None:
+            self.lsock.close()
+            self.lsock = None
 
     def gen_list(self, start, ln):
         divs = [2, 5, 10]
@@ -181,15 +191,20 @@ class SrProcess(Process):
                 values.append(int(start * 10 / divs[j] * mult))
             mult *= 10
         return values
+    
+    def create_sock(self, path):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.bind(path)
+        sock.listen(1)
+        return sock
 
     def set_device_num(self, devNum):
         self.reset_params()
-        if self._device is not None:
-            self._device.close()
-            self._device = None
         self._device = self._devices[devNum]
-        #analog=[]
-        #logic=[]
+        
+        lswa = False
+        aswa = False
+        
         try:
             self._session.remove_devices()
             self._device.open()
@@ -206,18 +221,42 @@ class SrProcess(Process):
                 values = self.gen_list(1, 8)
                 self._session_param['samplerates'] = values
             self._session_param['samplerate'] = self._device.config_get(ConfigKey.SAMPLERATE)
+            
+            if 'Logic' in self._device.channel_groups:
+                self.lsock = self.create_sock(tmp_dir + self.name + 'lsock')
+                self._session_param['channels'].append('LOGIC')
+                lswa = True
+                
+            if 'Analog' in self._device.channel_groups:
+                self.asock = self.create_sock(tmp_dir + self.name + 'asock')
+                self._session_param['channels'].append('ANALOG')
+                aswa = True
+
+            for item in self._device.config_keys():
+                    self._session_param['config'].append(str(item))
 
             for i, item in enumerate(self._device.channels):
                 if item.type.name == 'LOGIC':
                     self._logic_channels.append({'name': item.name, 'text':item.name, 'color':colorsArray[i], 'visible':True, 'traceHeight':34 })
+                    
                 elif item.type.name == 'ANALOG':
                     self._analog_channels.append({'name': item.name, 'text':item.name, 'color':colorsArray[i], 'visible':True, 'pVertDivs':1, 'nVertDivs':1, 'divHeight':34, 'vRes':20.0, 'autoranging':True, 'conversion':'', 'convThres':'', 'showTraces':'' })
 
             print(f"{bcolors.OKBLUE}Device open{bcolors.ENDC}")
-            self.client_pipe.send('ok')
+            self.client_pipe.send(self._session_param['channels'])
+            
+            if lswa:
+                self.lsock.accept()
+                print('lsoc accepted')
+                
+            if aswa:
+                self.asock.accept()
+                print('asoc accepted')
+            
+            #self.lsock.accept()
         except:
             print(f"{bcolors.FAIL}Device NOT open{bcolors.ENDC}")
-            self.client_pipe.send('err')
+            self.client_pipe.send(False)
         
     
     def session_run(self, run):
@@ -245,4 +284,5 @@ class SrProcess(Process):
     
     def __del__(self):
         self.client_pipe.close()
-        self.data_queue.close() 
+        self.asock.close()
+        self.lsock.close()

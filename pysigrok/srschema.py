@@ -123,7 +123,7 @@ class SelectDevice(graphene.Mutation):
     async def mutate(self, info:graphene.ResolveInfo, id, devNum):
         try:
             proc = info.context['srmng'].get_by_id(id)
-            data = proc.select_device(devNum)
+            data = await proc.select_device(devNum)
             return Session(**data)
         except:
             raise GraphQLError('Error selecting device')
