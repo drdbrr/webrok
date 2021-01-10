@@ -68,6 +68,9 @@ class SrProcessConnection:
         
         self.bt = 0
         
+        self._logic_pck_num = 0
+        self._analog_pck_num = 0
+        
         logger.info(f"{bcolors.WARNING}SR pid: %s{bcolors.ENDC}", self.sigrok.pid)
         
     def get_channels(self):
@@ -107,11 +110,14 @@ class SrProcessConnection:
             if 'LOGIC' in res:
                 print('Open lsock')
                 self.lreader, wr = await asyncio.open_unix_connection(tmp_dir + self.id + 'lsock')
+                
+                self.l_data_task = loop.create_task(self.ldata_handler_task())
+                
             if 'ANALOG' in res:
                 print('Open asock')
                 self.areader, wr = await asyncio.open_unix_connection(tmp_dir + self.id + 'asock')
                 
-                self.a_data_task = loop.create_task(self.data_handler_task(self.areader))
+                self.a_data_task = loop.create_task(self.adata_handler_task())
                 
             data = self.get_session()    
             return data
@@ -132,7 +138,10 @@ class SrProcessConnection:
         print('Start session data collection')
         self.data['analog'].clear()
         self.data['logic'].clear()
-        self._has_data = 0
+        #self._has_data = 0
+        
+        self._logic_pck_num = 0
+        self._analog_pck_num = 0
         
         self.ss_flag.value = 1
         request = SrApi('session_run', True)
@@ -146,11 +155,10 @@ class SrProcessConnection:
             await self.ws_client.send_json({ 'type':'config', 'sessionRun':True })
             
     async def stop_session(self):
-        print('Stop session data collection, deltaT:', time.time() - self.bt)
         self.ss_flag.value = 0
-        #self.data['logic'].clear()
-        #self.data['analog'].clear()
-        
+        print('RX analog:', self._analog_pck_num)
+        print('RX logic:', self._logic_pck_num)
+        print('Session deltaT:', time.time() - self.bt)
         await self.ws_client.send_json({ 'type':'config', 'sessionRun':False })
         
     def update_scale(self, data):
@@ -160,18 +168,27 @@ class SrProcessConnection:
         
     def update_x(self, x):
         self._x += x
-        print('self._x:', self._x)
+        print('x:', self._x)
         #self._mesh_width -= self._x
         
-    async def data_handler_task(self, reader):
+    async def ldata_handler_task(self):
         print(f"{bcolors.OKBLUE}Start data_task{bcolors.ENDC}")
         while True:
-            data = await reader.read(4096)
+            data = await self.lreader.read(4096)
             if data:
-                self._has_data += 1
-                
-                #print('data')
+                self.data['logic'].append(np.frombuffer(data, dtype='uint8'))
+                self._logic_pck_num += 1
+                #await self.ws_client.send_json({ 'type':'cnt', 'pck_cnt': self._has_data})
+            else:
+                break
+        
+    async def adata_handler_task(self):
+        print(f"{bcolors.OKBLUE}Start data_task{bcolors.ENDC}")
+        while True:
+            data = await self.areader.read(4096)
+            if data:
                 self.data['analog'].append(np.frombuffer(data, dtype='float32'))
+                self._analog_pck_num += 1
                 #await self.ws_client.send_json({ 'type':'cnt', 'pck_cnt': self._has_data})
             else:
                 break
@@ -209,7 +226,6 @@ class SrProcessConnection:
                 
             #END PACKET/ERROR SESSION
                 if self.ss_flag.value == 3:
-                    print(len(self.data['analog']))
                     await self.stop_session()
                     
             await asyncio.sleep(0.1)

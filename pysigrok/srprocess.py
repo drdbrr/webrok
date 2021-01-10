@@ -78,7 +78,7 @@ class SrProcess(Process):
     def _datafeed_in_callback(self, device, packet):
         if str(packet.type) == 'LOGIC':
             self._logic_pck_num += 1
-            self.lconn.sendall(packet.payload.data[0].tobytes())
+            self.lconn.sendall(packet.payload.data.tobytes())
             
         elif str(packet.type) == 'ANALOG':
             self._analog_pck_num += 1
@@ -87,8 +87,8 @@ class SrProcess(Process):
         elif str(packet.type) == 'END':
             print(f"{bcolors.WARNING}END sampling{bcolors.ENDC}")
             self.ss_flag.value = 3
-            print('analog packets:', self._analog_pck_num)
-            print('logic packets:', self._logic_pck_num)
+            print('TX analog packets:', self._analog_pck_num)
+            print('TX  logic packets:', self._logic_pck_num)
             
             self._analog_pck_num = 0
             self._logic_pck_num = 0
