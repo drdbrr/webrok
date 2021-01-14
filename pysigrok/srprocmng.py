@@ -1,16 +1,12 @@
-from multiprocessing import Process, Pipe, Queue, Event, Value
+from multiprocessing import Process, Pipe, Queue, Value
 import numpy as np
 import asyncio
-
-import os, signal, time, sys, io, itertools, zipfile, configparser, time, array
-import traceback
-from collections import deque, defaultdict
-
+from collections import deque
 from fastapi.logger import logger
-
 from uuid import uuid4
-
 from .srprocess import SrProcess
+
+import zipfile, configparser, time
 
 tmp_dir = '/tmp/webrok/'
 
@@ -51,9 +47,9 @@ class SrProcessConnection:
         self.ws_task = None
         self.a_data_task = None
         
-        self.data = {'logic':deque(), 'analog':deque()}
+        #self.data = {'logic':deque(), 'analog':deque()}
 
-        self._displayWidth = 1680
+        self._displayWidth = 2000
         self._has_data = 0
         self._x = 0
         self._scale = 1
@@ -61,8 +57,8 @@ class SrProcessConnection:
         #self._camera_pos = 0
         #self._C = None
         self._pckLen = 512
-        self._bitWidth = 50 #50 или 1
-        self._bitHeight = 50 #50 или 1
+        self._bitWidth = 1 #50 или 1
+        self._bitHeight = 1 #50 или 1
         self._positions = list( [0] * 8)
         self._ranges = list( [0] * 8)
         
@@ -70,6 +66,14 @@ class SrProcessConnection:
         
         self._logic_pck_num = 0
         self._analog_pck_num = 0
+        self.pl = 0
+        self.pckNum = 0
+        
+        self.channels = None
+        self.mesh_logic_data = {}
+        self.mesh_analog_data = {}
+        self.logic_data = deque()
+        self.analog_data = deque()
         
         logger.info(f"{bcolors.WARNING}SR pid: %s{bcolors.ENDC}", self.sigrok.pid)
         
@@ -102,27 +106,30 @@ class SrProcessConnection:
         return data
     
     async def select_device(self, devNum):
-        res = self.runcmd('set_device_num', devNum)
-        
         loop = asyncio.get_event_loop()
+        self.channels = self.runcmd('set_device_num', devNum)
         
-        if res:
-            if 'LOGIC' in res:
-                print('Open lsock')
-                self.lreader, wr = await asyncio.open_unix_connection(tmp_dir + self.id + 'lsock')
-                
-                self.l_data_task = loop.create_task(self.ldata_handler_task())
-                
-            if 'ANALOG' in res:
-                print('Open asock')
-                self.areader, wr = await asyncio.open_unix_connection(tmp_dir + self.id + 'asock')
-                
-                self.a_data_task = loop.create_task(self.adata_handler_task())
-                
-            data = self.get_session()    
-            return data
-        else:
-            print('Error selecting device')
+        self.mesh_logic_data.clear()
+        self.mesh_analog_data.clear()
+        
+        if 'logic' in self.channels.keys():
+            self.lreader, wr = await asyncio.open_unix_connection(tmp_dir + self.id + 'lsock')
+            self.l_data_task = loop.create_task(self.ldata_handler_task())
+            print('Open lsock')
+            
+        if 'analog' in self.channels.keys():
+            self.areader, wr = await asyncio.open_unix_connection(tmp_dir + self.id + 'asock')
+            self.a_data_task = loop.create_task(self.adata_handler_task())
+            print('Open asock')
+            
+        for item in self.channels['logic']:
+            self.mesh_logic_data.update({item['name']:{'data':[], 'range':[0, 0], 'pos':0}})
+            
+        for item in self.channels['analog']:
+            self.mesh_analog_data.update({item['name']:{'data':[], 'range':[0, 0], 'pos':0}})
+            
+        data = self.get_session()
+        return data
             
     def runcmd(self, cmd, param = None):
         request = SrApi(cmd, param)
@@ -136,12 +143,21 @@ class SrProcessConnection:
     
     async def start_session(self, run):
         print('Start session data collection')
-        self.data['analog'].clear()
-        self.data['logic'].clear()
-        #self._has_data = 0
+
+        #self.data['analog'].clear()
+        #self.data['logic'].clear()
+        self.logic_data.clear()
+        self.analog_data.clear()
         
         self._logic_pck_num = 0
         self._analog_pck_num = 0
+        self._mesh_width = 0
+        self.pl = 0
+        self.pckNum = 0
+        self._has_data = 0
+        self._positions = list( [0] * 8)
+        self._ranges = list( [0] * 8)
+        
         
         self.ss_flag.value = 1
         request = SrApi('session_run', True)
@@ -158,26 +174,29 @@ class SrProcessConnection:
         self.ss_flag.value = 0
         print('RX analog:', self._analog_pck_num)
         print('RX logic:', self._logic_pck_num)
-        print('Session deltaT:', time.time() - self.bt)
+        print('Session time:', time.time() - self.bt)
         await self.ws_client.send_json({ 'type':'config', 'sessionRun':False })
         
-    def update_scale(self, data):
-        self._scale = data
-        print('scale:', self._scale)
-        #self._mesh_width *= self._scale
+    def update_scale(self, scale):
+        self._scale = scale
+        self._mesh_width *= self._scale
+        print('scale:', scale)
         
     def update_x(self, x):
         self._x += x
+        self._mesh_width -= x
         print('x:', self._x)
-        #self._mesh_width -= self._x
         
     async def ldata_handler_task(self):
         print(f"{bcolors.OKBLUE}Start data_task{bcolors.ENDC}")
         while True:
             data = await self.lreader.read(4096)
             if data:
-                self.data['logic'].append(np.frombuffer(data, dtype='uint8'))
+                arr = np.frombuffer(data, dtype='uint8').reshape((len(data), 1))
+                #self.data['logic'].append(arr)
+                self.logic_data.append(arr)
                 self._logic_pck_num += 1
+                self._has_data += 1
                 #await self.ws_client.send_json({ 'type':'cnt', 'pck_cnt': self._has_data})
             else:
                 break
@@ -187,7 +206,7 @@ class SrProcessConnection:
         while True:
             data = await self.areader.read(4096)
             if data:
-                self.data['analog'].append(np.frombuffer(data, dtype='float32'))
+                self.analog_data.append(np.frombuffer(data, dtype='float32'))
                 self._analog_pck_num += 1
                 #await self.ws_client.send_json({ 'type':'cnt', 'pck_cnt': self._has_data})
             else:
@@ -196,46 +215,44 @@ class SrProcessConnection:
     async def ws_task_coro(self):
         #logger.info(f"{bcolors.WARNING}Start ws_task{bcolors.ENDC}")
         print(f"{bcolors.OKBLUE}Start ws_task{bcolors.ENDC}")
-        pckNum = 0
+        #pckNum = 0
         while True:
             if self.ws_client:
-                #if self._mesh_width < self._displayWidth and self._has_data:
-                    #mesh_data = {
-                        #'D0':{'data':[], 'range':[0, 0], 'pos':0},
-                        #'D1':{'data':[], 'range':[0, 0], 'pos':0},
-                        #'D2':{'data':[], 'range':[0, 0], 'pos':0},
-                        #'D3':{'data':[], 'range':[0, 0], 'pos':0},
-                        #'D4':{'data':[], 'range':[0, 0], 'pos':0},
-                        #'D5':{'data':[], 'range':[0, 0], 'pos':0},
-                        #'D6':{'data':[], 'range':[0, 0], 'pos':0},
-                        #'D7':{'data':[], 'range':[0, 0], 'pos':0}
-                    #}
+                if self._mesh_width < self._displayWidth and self._has_data:
                     
-                    #data = self.process_data(pckNum, pckNum + 1)
+                    mesh_logic_data = self.mesh_logic_data.copy()
+                    mesh_analog_data = self.mesh_analog_data.copy()
                     
-                    #self._mesh_width = ( (pckNum * (self._pckLen * self._bitWidth)) * self._scale ) / 2
-                    #for i, nm in enumerate(mesh_data):
-                        #self._ranges[i] += int(len(data[nm]) / 3)
-                        #mesh_data[nm]['data'] = list(data[nm])
-                        #mesh_data[nm]['range'][1] = self._ranges[i]
-                        #mesh_data[nm]['pos'] = self._positions[i]
-                        #self._positions[i] += len(data[nm])
-                    #await self.ws_client.send_json({ 'type':'data', 'data':mesh_data })
-                    #pckNum += 1
-                    #self._has_data -= 1
+                    data = self.process_logic_data(self.pckNum, self.pckNum + 1)
+                    
+                    self._mesh_width = ( (self.pckNum * (self._pckLen * self._bitWidth)) * self._scale ) / 2
+                    for i, nm in enumerate(mesh_logic_data):
+                        self._ranges[i] += int(len(data[nm]) / 3)
+                        mesh_logic_data[nm]['data'] = list(data[nm])
+                        mesh_logic_data[nm]['range'][1] = self._ranges[i]
+                        mesh_logic_data[nm]['pos'] = self._positions[i]
+                        self._positions[i] += len(data[nm])
+                    
+                    for i, nm in enumerate(mesh_analog_data):
+                        pass
+                        
+                    
+                    await self.ws_client.send_json({ 'type':'data', 'logic':mesh_logic_data, 'analog':mesh_analog_data })
+                    self.pckNum += 1
+                    self._has_data -= 1
+                    
                 
-            #END PACKET/ERROR SESSION
-                if self.ss_flag.value == 3:
-                    await self.stop_session()
-                    
-            await asyncio.sleep(0.1)
+            #STOP SAMPLING indication
+            if self.ss_flag.value == 3:
+                await self.stop_session()
+
+            await asyncio.sleep(0.01)
 #----------------------------------------------
-
-
-    #NOTE: (start, end) - packet numbers
-    def process_data(self, start, end):
-        packet = { 'D0':deque(), 'D1':deque(), 'D2':deque(), 'D3':deque(), 'D4':deque(), 'D5':deque(), 'D6':deque(), 'D7':deque() }
-        data_slice = np.unpackbits(self.data[start], axis=1)
+    def process_logic_data(self, start, end):
+        packet = {}
+        for item in self.channels['logic']:
+            packet.update({item['name']:deque()})
+        data_slice = np.unpackbits(self.logic_data[start], axis=1)
         data_slice = np.rot90(data_slice)
         for chNum, (ch, pckEntry) in enumerate( zip(data_slice, packet) ):
             pointIndex = 0
@@ -260,12 +277,11 @@ class SrProcessConnection:
             self.client_pipe_A.close()
             self.l_data_task.cancel()
             self.a_data_task.cancel()
-            #os.kill(self.sigrok.pid, signal.SIGINT)
             self.sigrok.join()
             self.sigrok.close()
 
-    async def create_sr_file(self, name):
-        z = zipfile.ZipFile(name, 'w', zipfile.ZIP_DEFLATED)
+    #async def create_sr_file(self, name):
+        #z = zipfile.ZipFile(name, 'w', zipfile.ZIP_DEFLATED)
             
     async def open_sr_file(self, zf):
         z = None
@@ -285,7 +301,7 @@ class SrProcessConnection:
             if item.startswith(capturefile):
                 data_file = z.open(item)
                 
-        self.data.clear()
+        #self.data.clear()
         step = 0
         while step <= data_file.tell():
             data_file.seek(step)

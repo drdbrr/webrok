@@ -31,7 +31,6 @@ class SrWsEndpoint(WebSocketEndpoint):
     async def on_receive(self, websocket, data):
         #print('WS data:', data,)
         #logger.debug(f'{bcolors.WARNING}WS data: %s{bcolors.ENDC}', data)
-        
         for key in data.keys():
             if key == 'scale':
                 self.proc.update_scale(data.get('scale'))
@@ -41,10 +40,8 @@ class SrWsEndpoint(WebSocketEndpoint):
                 
             elif key == 'session_run' and data.get('session_run'):
                 await self.proc.start_session(data.get('session_run'))
-                #self.proc.a_data_task = self.srmng.loop.create_task(self.proc.adata_handler_task())
             
             elif key == 'session_run' and not data.get('session_run'):
-                #self.proc.data_task.cancel()
                 await self.proc.stop_session()
         
     async def on_disconnect(self, websocket, close_code):

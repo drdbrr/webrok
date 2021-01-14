@@ -1,11 +1,6 @@
-from multiprocessing import Process, shared_memory
+from multiprocessing import Process
 from sigrok.core.classes import *
-
 import socket
-import sys
-import os
-import time
-
 import numpy as np
 
 tmp_dir = '/tmp/webrok/'
@@ -80,11 +75,11 @@ class SrProcess(Process):
             self._logic_pck_num += 1
             self.lconn.sendall(packet.payload.data.tobytes())
             
-        elif str(packet.type) == 'ANALOG':
+        if str(packet.type) == 'ANALOG':
             self._analog_pck_num += 1
             self.aconn.sendall(packet.payload.data[0].tobytes())
 
-        elif str(packet.type) == 'END':
+        if str(packet.type) == 'END':
             print(f"{bcolors.WARNING}END sampling{bcolors.ENDC}")
             self.ss_flag.value = 3
             print('TX analog packets:', self._analog_pck_num)
@@ -93,10 +88,13 @@ class SrProcess(Process):
             self._analog_pck_num = 0
             self._logic_pck_num = 0
             
-        elif self.ss_flag.value == 0 and self._session.is_running():
+        if self.ss_flag.value == 0 and self._session.is_running():
             print(f"{bcolors.WARNING}STOP sampling{bcolors.ENDC}")
             self._session.stop()
             self.ss_flag.value = 3
+            
+            print('TX analog packets:', self._analog_pck_num)
+            print('TX  logic packets:', self._logic_pck_num)
             self._analog_pck_num = 0
             self._logic_pck_num = 0
 
@@ -163,6 +161,7 @@ class SrProcess(Process):
         if self._device is not None:
             self._device.close()
             self._device = None
+            self._session.remove_devices()
         
         if self.asock is not None:
             self.asock.close()
@@ -192,12 +191,13 @@ class SrProcess(Process):
         self.reset_params()
         self._device = self._devices[devNum]
         
-        lswa = False
-        aswa = False
+        lswa = False #logic socket wait accepting
+        aswa = False #analog socket wait accepting
         
         try:
-            self._session.remove_devices()
+            #self._session.remove_devices()
             self._device.open()
+            print(f"{bcolors.OKBLUE}Device open{bcolors.ENDC}")
             self._device.config_set(ConfigKey.LIMIT_SAMPLES, 500000)
             self._session.add_device(self._device)
             self._session_param['sourcename'] = self._driver.name
@@ -212,19 +212,6 @@ class SrProcess(Process):
                 self._session_param['samplerates'] = values
             self._session_param['samplerate'] = self._device.config_get(ConfigKey.SAMPLERATE)
             
-            if 'Logic' in self._device.channel_groups:
-                self.lsock = self.create_sock(tmp_dir + self.name + 'lsock')
-                self._session_param['channels'].append('LOGIC')
-                lswa = True
-                
-            if 'Analog' in self._device.channel_groups:
-                self.asock = self.create_sock(tmp_dir + self.name + 'asock')
-                self._session_param['channels'].append('ANALOG')
-                aswa = True
-
-            for item in self._device.config_keys():
-                    self._session_param['config'].append(str(item))
-
             for i, item in enumerate(self._device.channels):
                 if item.type.name == 'LOGIC':
                     self._logic_channels.append({'name': item.name, 'text':item.name, 'color':colorsArray[i], 'visible':True, 'traceHeight':34 })
@@ -232,8 +219,24 @@ class SrProcess(Process):
                 elif item.type.name == 'ANALOG':
                     self._analog_channels.append({'name': item.name, 'text':item.name, 'color':colorsArray[i], 'visible':True, 'pVertDivs':1, 'nVertDivs':1, 'divHeight':34, 'vRes':20.0, 'autoranging':True, 'conversion':'', 'convThres':'', 'showTraces':'' })
 
-            print(f"{bcolors.OKBLUE}Device open{bcolors.ENDC}")
-            self.client_pipe.send(self._session_param['channels'])
+            resonse = {}
+            if 'Logic' in self._device.channel_groups:
+                self.lsock = self.create_sock(tmp_dir + self.name + 'lsock')
+                self._session_param['channels'].append('LOGIC')
+                lswa = True
+                resonse.update({'logic':self._logic_channels})
+                
+            if 'Analog' in self._device.channel_groups:
+                self.asock = self.create_sock(tmp_dir + self.name + 'asock')
+                self._session_param['channels'].append('ANALOG')
+                aswa = True
+                resonse.update({'analog':self._analog_channels})
+
+            for item in self._device.config_keys():
+                    self._session_param['config'].append(str(item))
+            
+            self.client_pipe.send(resonse)
+            #self.client_pipe.send(self._session_param['channels'])
             
             if lswa:
                 self.lconn, addr = self.lsock.accept()
