@@ -4,11 +4,15 @@ import asyncio
 from collections import deque
 from fastapi.logger import logger
 from uuid import uuid4
-from .srprocess import SrProcess
-
-import zipfile, configparser, time
+from subprocess import Popen
+import zipfile, configparser, time, json, os
 
 tmp_dir = '/tmp/webrok/'
+
+JSON_PT = 0b00000001
+BINARY_PT = 0b00000010
+AUTO_JSON_PT = 0b00000011
+AUTO_BINARY_PT = 0b00000100
 
 class bcolors:
     HEADER = '\033[95m'
@@ -19,333 +23,234 @@ class bcolors:
     ENDC = '\033[0m'
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
-            
-class SrApi:
-    def __init__(self, req, param = None):
-        self.cb = req
-        self.param = param
-        
-    def run(self, context):
-        func = getattr(context, self.cb)
-        if self.param is not None:
-            func(self.param)
-        else:
-            func()
+    
+colorsArray = [
+    '#fce94f', '#fcaf3e', '#e9b96e', '#8ae234', '#729fcf', '#ad7fa8', '#cf72c3', '#ef2929',
+    '#edd400', '#f57900', '#c17d11', '#73d216', '#3465a4', '#75507b', '#a33496', '#cc0000',
+    '#c4a000', '#ce5c00', '#8f5902', '#4e9a06', '#204a87', '#5c3566', '#87207a', '#a40000',
+    '#16191a', '#2e3436', '#555753', '#888a8f', '#babdb6', '#d3d7cf', '#eeeeec', '#ffffff'
+]
 
+class TestWsHandler:
+    def __init__(self, ws):
+        self.ws = ws
+    
+    async def send(self, data):
+        await self.ws.send_json(data)
+    
 class SrProcessConnection:
     def __init__(self, id, name):
         self.id = id
         self.name = name #Session name
-        
-        self.client_pipe_A, self.client_pipe_B = Pipe()
-        self.ss_flag = Value('h', 0)
-        
-        self.sigrok = SrProcess(self.client_pipe_B, self.ss_flag, name = self.id, daemon=True)
-        self.sigrok.start()
+        self.sr_proc = Popen(["/home/drjacka/sigrok-proc/src/srproc", "-u", tmp_dir + self.id + ".sock"])
+        self.sr_task = None
+        self.writer = None
+        self.reader = None
         
         self.ws_client = None
-        self.ws_task = None
-        self.a_data_task = None
+        self.ws_clients = dict()
         
-        #self.data = {'logic':deque(), 'analog':deque()}
-
-        self._displayWidth = 2000
-        self._has_data = 0
-        self._x = 0
-        self._scale = 1
-        self._mesh_width = 1
-        #self._camera_pos = 0
-        #self._C = None
-        self._pckLen = 512
-        self._bitWidth = 1 #50 или 1
-        self._bitHeight = 1 #50 или 1
-        self._positions = list( [0] * 8)
-        self._ranges = list( [0] * 8)
+        self.session_state = None
+        self.rx_queue = asyncio.Queue()
         
-        self.bt = 0
-        
-        self._logic_pck_num = 0
-        self._analog_pck_num = 0
-        self.pl = 0
-        self.pckNum = 0
-        
-        self.channels = None
-        self.mesh_logic_data = {}
-        self.mesh_analog_data = {}
-        self.logic_data = deque()
-        self.analog_data = deque()
-        
-        logger.info(f"{bcolors.WARNING}SR pid: %s{bcolors.ENDC}", self.sigrok.pid)
-        
-    def get_channels(self):
-        data = self.runcmd('get_channels')
-        return data
-        
-    def get_sample(self):
-        data = self.runcmd('get_sample')
-        return data
-        
-    def get_samplerate(self):
-        data = self.runcmd('get_samplerate')
-        return data
-        
-    def select_samplerate(self, smp):
-        res = self.runcmd('set_samplerate', smp)
+    async def sr_conn_task(self):
+        self.reader, self.writer = await asyncio.open_unix_connection(tmp_dir + self.id + ".sock")
+        status = await self.reader.read(19)
+        #NOTE HANDSHAKE
+        if status[0] == JSON_PT:
+            data = json.loads(status[1:])
+            print(data)
+            await self.rx_queue.put(data['status'])
+            if data['status'] == 'ready':
+        #END HANDSHAKE
+                while True:
+                    response = await self.reader.read(4096)
+                    if response:
+                        
+                        if response[0] == JSON_PT:
+                            data = json.loads(response[1:])
+                            await self.rx_queue.put(data)
+                            
+                        elif response[0] == AUTO_JSON_PT:
+                            data = json.loads(response[1:])
+                            
+                            if "run_session" in data.keys():
+                                self.session_state = data['run_session']
+                                for client in self.ws_clients.values():
+                                    #await client.send({ 'type':'config', 'sessionRun':self.session_state })
+                                    await client.ws.send_json({ 'type':'config', 'sessionRun':self.session_state })
+                                #await self.ws_client.send_json({ 'type':'config', 'sessionRun':self.session_state })
+                            
+                        elif response[0] == AUTO_BINARY_PT:
+                            print('RX data:', response)
+                    else:
+                        break
     
-    def select_sample(self, smpl):
-        res = self.runcmd('set_sample', smpl)
+    async def update_session_state(self):
+        tx_data = {'get':['session_state']}
+        msg = json.dumps(tx_data)
+        self.writer.write(msg.encode())
+        await self.writer.drain()
+        data = await self.rx_queue.get()
+        self.session_state = int(data['get']['session_state'])
+        #print("get_session_state:", self.session_state)
         
-    def scan_devices(self, drv):
-        data = self.runcmd('get_scan', drv)
-        return data
+        for client in self.ws_clients.values():
+            #await client.send({ 'type':'config', 'sessionRun':self.session_state })
+            await client.ws.send_json({ 'type':'config', 'sessionRun':self.session_state })
+        #await self.ws_client.send_json({ 'type':'config', 'sessionRun':self.session_state })
     
-    def get_session(self):
-        data = self.runcmd('get_session')
-        data['id'] = str(self.id)
-        data['name'] = str(self.name)
-        return data
+    async def get_channels(self):
+        tx_data = {'get':['channels']}
+        msg = json.dumps(tx_data)
+        self.writer.write(msg.encode())
+        await self.writer.drain()
+        data = await self.rx_queue.get()
+        col_num = 0
+        for chg in data['get']['channels'].values():
+            for ch in chg:
+                ch['color'] = colorsArray[col_num]
+                col_num += 1
+        return data['get']['channels']
+            
+    async def get_sample(self):
+        tx_data = {'get':['sample', 'samples']}
+        msg = json.dumps(tx_data)
+        self.writer.write(msg.encode())
+        await self.writer.drain()
+        data = await self.rx_queue.get()
+        return data['get']
+            
+    async def get_samplerate(self):
+        tx_data = {'get':['samplerate', 'samplerates']}
+        msg = json.dumps(tx_data)
+        self.writer.write(msg.encode())
+        await self.writer.drain()
+        data = await self.rx_queue.get()
+        return data['get']
+            
+    async def get_drivers(self):
+        tx_data = {'get':['drivers']}
+        msg = json.dumps(tx_data)
+        self.writer.write(msg.encode())
+        await self.writer.drain()
+        data = await self.rx_queue.get()
+        return data['get']['drivers']
+        
+    async def get_session(self):
+        tx_data = {'get':['session']}
+        msg = json.dumps(tx_data)
+        self.writer.write(msg.encode())
+        await self.writer.drain()
+        data = await self.rx_queue.get()
+        session = dict(data['get']['session'])
+        session.update({'id':self.id, 'name':self.name})
+        return session
     
     async def select_device(self, devNum):
-        loop = asyncio.get_event_loop()
-        self.channels = self.runcmd('set_device_num', devNum)
-        
-        self.mesh_logic_data.clear()
-        self.mesh_analog_data.clear()
-        
-        if 'logic' in self.channels.keys():
-            self.lreader, wr = await asyncio.open_unix_connection(tmp_dir + self.id + 'lsock')
-            self.l_data_task = loop.create_task(self.ldata_handler_task())
-            print('Open lsock')
-            
-        if 'analog' in self.channels.keys():
-            self.areader, wr = await asyncio.open_unix_connection(tmp_dir + self.id + 'asock')
-            self.a_data_task = loop.create_task(self.adata_handler_task())
-            print('Open asock')
-            
-        for item in self.channels['logic']:
-            self.mesh_logic_data.update({item['name']:{'data':[], 'range':[0, 0], 'pos':0}})
-            
-        for item in self.channels['analog']:
-            self.mesh_analog_data.update({item['name']:{'data':[], 'range':[0, 0], 'pos':0}})
-            
-        data = self.get_session()
-        return data
-            
-    def runcmd(self, cmd, param = None):
-        request = SrApi(cmd, param)
-        self.client_pipe_A.send(request)
-        try:
-            data = self.client_pipe_A.recv()
-        except:
-            print('error reading data')
-        return data
-#----------------------------------------------
-    
-    async def start_session(self, run):
-        print('Start session data collection')
-
-        #self.data['analog'].clear()
-        #self.data['logic'].clear()
-        self.logic_data.clear()
-        self.analog_data.clear()
-        
-        self._logic_pck_num = 0
-        self._analog_pck_num = 0
-        self._mesh_width = 0
-        self.pl = 0
-        self.pckNum = 0
-        self._has_data = 0
-        self._positions = list( [0] * 8)
-        self._ranges = list( [0] * 8)
-        
-        
-        self.ss_flag.value = 1
-        request = SrApi('session_run', True)
-        
-        self.client_pipe_A.send(request)
-        if self.client_pipe_A.poll(0.1):
-            resp = self.client_pipe_A.recv()
-            await self.ws_client.send_json({ 'type':'config', 'sessionRun':False })
+        tx_data = {'set':{'dev_num':devNum}}
+        msg = json.dumps(tx_data)
+        self.writer.write(msg.encode())
+        await self.writer.drain()
+        data = await self.rx_queue.get()
+        if data['set']['dev_num'] == 'set':
+            session = await self.get_session()
+            return session
         else:
-            self.bt = time.time()
-            await self.ws_client.send_json({ 'type':'config', 'sessionRun':True })
-            
-    async def stop_session(self):
-        self.ss_flag.value = 0
-        print('RX analog:', self._analog_pck_num)
-        print('RX logic:', self._logic_pck_num)
-        print('Session time:', time.time() - self.bt)
-        await self.ws_client.send_json({ 'type':'config', 'sessionRun':False })
+            return {}
+    
+    async def scan_devices(self, drv):
+        tx_data = {'set':{'driver':drv}}
+        msg = json.dumps(tx_data)
+        self.writer.write(msg.encode())
+        await self.writer.drain()
+        data = await self.rx_queue.get()
+        if data['set']['driver'] == 'set':
+            tx_data = {'get':['scan']}
+            msg = json.dumps(tx_data)
+            self.writer.write(msg.encode())
+            await self.writer.drain()
+            data = await self.rx_queue.get()
+            return data['get']['scan']
+        else:
+            return []
         
-    def update_scale(self, scale):
-        self._scale = scale
-        self._mesh_width *= self._scale
-        print('scale:', scale)
+    async def select_sample(self, sample):
+        tx_data = {'set':{'sample':int(sample)}}
+        msg = json.dumps(tx_data)
+        self.writer.write(msg.encode())
+        await self.writer.drain()
+        data = await self.rx_queue.get()
+        return data['set']['sample']
+    
+    async def select_samplerate(self, samplerate):
+        tx_data = {'set':{'samplerate':int(samplerate)}}
+        msg = json.dumps(tx_data)
+        self.writer.write(msg.encode())
+        await self.writer.drain()
+        data = await self.rx_queue.get()
+        return data['set']['samplerate']
+    
+    async def run_session(self):
+        tx_data = {'set':{'run_session':int(self.session_state)}} # VALUE NO MATTERS
+        msg = json.dumps(tx_data)
+        self.writer.write(msg.encode())
+        await self.writer.drain()
+        data = await self.rx_queue.get()
+        self.session_state = data['set']['run_session']
+        await self.ws_client.send_json({ 'type':'config', 'sessionRun':self.session_state })
         
-    def update_x(self, x):
-        self._x += x
-        self._mesh_width -= x
-        print('x:', self._x)
-        
-    async def ldata_handler_task(self):
-        print(f"{bcolors.OKBLUE}Start data_task{bcolors.ENDC}")
-        while True:
-            data = await self.lreader.read(4096)
-            if data:
-                arr = np.frombuffer(data, dtype='uint8').reshape((len(data), 1))
-                #self.data['logic'].append(arr)
-                self.logic_data.append(arr)
-                self._logic_pck_num += 1
-                self._has_data += 1
-                #await self.ws_client.send_json({ 'type':'cnt', 'pck_cnt': self._has_data})
-            else:
-                break
-        
-    async def adata_handler_task(self):
-        print(f"{bcolors.OKBLUE}Start data_task{bcolors.ENDC}")
-        while True:
-            data = await self.areader.read(4096)
-            if data:
-                self.analog_data.append(np.frombuffer(data, dtype='float32'))
-                self._analog_pck_num += 1
-                #await self.ws_client.send_json({ 'type':'cnt', 'pck_cnt': self._has_data})
-            else:
-                break
-        
-    async def ws_task_coro(self):
-        #logger.info(f"{bcolors.WARNING}Start ws_task{bcolors.ENDC}")
-        print(f"{bcolors.OKBLUE}Start ws_task{bcolors.ENDC}")
-        #pckNum = 0
-        while True:
-            if self.ws_client:
-                if self._mesh_width < self._displayWidth and self._has_data:
-                    
-                    mesh_logic_data = self.mesh_logic_data.copy()
-                    mesh_analog_data = self.mesh_analog_data.copy()
-                    
-                    data = self.process_logic_data(self.pckNum, self.pckNum + 1)
-                    
-                    self._mesh_width = ( (self.pckNum * (self._pckLen * self._bitWidth)) * self._scale ) / 2
-                    for i, nm in enumerate(mesh_logic_data):
-                        self._ranges[i] += int(len(data[nm]) / 3)
-                        mesh_logic_data[nm]['data'] = list(data[nm])
-                        mesh_logic_data[nm]['range'][1] = self._ranges[i]
-                        mesh_logic_data[nm]['pos'] = self._positions[i]
-                        self._positions[i] += len(data[nm])
-                    
-                    for i, nm in enumerate(mesh_analog_data):
-                        pass
-                        
-                    
-                    await self.ws_client.send_json({ 'type':'data', 'logic':mesh_logic_data, 'analog':mesh_analog_data })
-                    self.pckNum += 1
-                    self._has_data -= 1
-                    
-                
-            #STOP SAMPLING indication
-            if self.ss_flag.value == 3:
-                await self.stop_session()
-
-            await asyncio.sleep(0.01)
-#----------------------------------------------
-    def process_logic_data(self, start, end):
-        packet = {}
-        for item in self.channels['logic']:
-            packet.update({item['name']:deque()})
-        data_slice = np.unpackbits(self.logic_data[start], axis=1)
-        data_slice = np.rot90(data_slice)
-        for chNum, (ch, pckEntry) in enumerate( zip(data_slice, packet) ):
-            pointIndex = 0
-            prevVal = -1
-            for bitNum, bitVal in enumerate(ch):
-                if bitNum <= (self._pckLen) and bitVal != prevVal:
-                    pointIndex += 6
-                    x1 = (start * self._pckLen * self._bitWidth) + bitNum * self._bitWidth
-                    packet[pckEntry].extend([
-                        x1,
-                        bool(bitVal) * self._bitHeight,
-                        0,
-                        x1 + self._bitWidth,
-                        bool(bitVal) * self._bitHeight,
-                        0 ])
-                elif bitNum <= (self._pckLen) and bitVal == prevVal:
-                    packet[pckEntry][pointIndex-3] += self._bitWidth
-                prevVal = bitVal
-        return packet
-        
+    def stop(self):
+        self.sr_proc.kill()
+        self.writer.close()
+        self.sr_task.cancel()
+        os.remove(tmp_dir + self.id + ".sock")
+    
     def __del__(self):
-            self.client_pipe_A.close()
-            self.l_data_task.cancel()
-            self.a_data_task.cancel()
-            self.sigrok.join()
-            self.sigrok.close()
-
-    #async def create_sr_file(self, name):
-        #z = zipfile.ZipFile(name, 'w', zipfile.ZIP_DEFLATED)
-            
-    async def open_sr_file(self, zf):
-        z = None
-        data_file = None
-        config = configparser.ConfigParser()
-        try:
-            z = zipfile.ZipFile(zf)
-            config.read_string(z.read('metadata').decode('ascii'))
-            version = config.get('global', 'sigrok version').split('-')[0]
-            if version < '0.2.0':
-                raise
-        except:
-            return {'error':'Invalid file'}
-        
-        capturefile = config.get('device 1', 'capturefile')
-        for item in z.namelist():
-            if item.startswith(capturefile):
-                data_file = z.open(item)
-                
-        #self.data.clear()
-        step = 0
-        while step <= data_file.tell():
-            data_file.seek(step)
-            ar = np.fromstring(data_file.read(512), dtype='uint8')
-            ar = np.expand_dims(ar, axis=1)
-            self.data.append(ar)
-            step += 512
-        z.close()
-        return {'error':''}
+        print("Stopping session:", self.id)
+    
 #_____________________________________
 
 class SrProcessManager:
     def __init__(self):
-        self.loop = asyncio.get_event_loop()
         self._procs = {}
         self.ses_num = 0
-        #self.data_task = self.loop.create_task(self.data_task_coro())
+        self.loop = asyncio.get_event_loop()
 
     def get_drivers(self):
         id = next(iter(self._procs))
         proc = self._procs[id]
-        drv_list = proc.runcmd('get_drivers')
+        drv_list = proc.get_drivers()
         return drv_list
         
     def get_sessions(self):
         return [ { 'id':item, 'name':self._procs[item].name } for item in self._procs ]
         
-    def create_session(self):
+    async def create_session(self):
         logger.info(f"{bcolors.WARNING}Create SR session{bcolors.ENDC}")
         name = 'session' + str(self.ses_num)
         id = str(uuid4())
         proc = SrProcessConnection(id, name)
-        proc.ws_task = self.loop.create_task(proc.ws_task_coro())
-        self._procs[id] = proc
         self.ses_num += 1
-        return { 'id':id, 'name': proc.name }
+        
+        self._procs[id] = proc
+        while not os.path.exists(tmp_dir + id + ".sock"):
+            await asyncio.sleep(0)
+            
+        proc.sr_task = self.loop.create_task(proc.sr_conn_task())
+        status = await proc.rx_queue.get()
+        if status == 'ready':
+            return { 'id':id, 'name': proc.name }
     
     def get_by_id(self, id):
         if id in self._procs:
-            proc = self._procs[id]
-            return proc
+            return self._procs[id]
         else:
             return None
     
-    def delete_session(self, id):
+    async def delete_session(self, id):
         logger.info(f"{bcolors.WARNING}Delete SR session{bcolors.ENDC}")
+        self._procs[id].stop()
         del self._procs[id]
+        return id
+        

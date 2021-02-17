@@ -54,7 +54,7 @@ async def startup_event():
     try:
         if not os.path.isdir(tmp_dir):
             os.mkdir(tmp_dir)
-        srProcessManager.create_session()
+        await srProcessManager.create_session()
     except:
         print('App.startup: Can not create session')
         

@@ -1,5 +1,6 @@
 import graphene
 from graphql import GraphQLError
+import time
 
 #---------API---------#
 # info.context['srmng'] = SrProcessManager: create_session:id, delete_session(id), get_sessions:[id], get_drivers:[drv], get_by_id(id):proc, get_session(id):{params}
@@ -70,7 +71,7 @@ class SrQuery(graphene.ObjectType):
     
     async def resolve_getChannels(self, info:graphene.ResolveInfo, id):
         proc = info.context['srmng'].get_by_id(id)
-        data = proc.get_channels()
+        data = await proc.get_channels()
         analog = []
         logic=[]
         for item in data['logic']:
@@ -83,22 +84,24 @@ class SrQuery(graphene.ObjectType):
     
     async def resolve_sample(self, info:graphene.ResolveInfo, id):
         proc = info.context['srmng'].get_by_id(id)
-        data = proc.get_sample()
+        data = await proc.get_sample()
         return Sample(**data)
     
     async def resolve_samplerate(self, info:graphene.ResolveInfo, id):
         proc = info.context['srmng'].get_by_id(id)
-        data = proc.get_samplerate()
+        data = await proc.get_samplerate()
         return Samplerate(**data)
     
     async def resolve_scanDevices(self, info:graphene.ResolveInfo, id, drv):
         proc = info.context['srmng'].get_by_id(id)
-        data = proc.scan_devices(drv)
+        data = await proc.scan_devices(drv)
         return [ DeviceInfo(**item) for item in data ]
     
     async def resolve_drivers(self, info:graphene.ResolveInfo):
         try:
-            data = info.context['srmng'].get_drivers()
+            id = next(iter(info.context['srmng']._procs))
+            proc = info.context['srmng'].get_by_id(id)
+            data = await proc.get_drivers()
             return data
         except:
             raise GraphQLError('Error getting drivers')
@@ -109,7 +112,7 @@ class SrQuery(graphene.ObjectType):
     
     async def resolve_session(self, info:graphene.ResolveInfo, id):
         proc = info.context['srmng'].get_by_id(id)
-        data = proc.get_session()
+        data = await proc.get_session()
         return Session(**data)
 
 #---------MUTATIONS---------#
@@ -132,7 +135,7 @@ class CreateSession(graphene.Mutation):
     Output = Session
     async def mutate(self, info:graphene.ResolveInfo):
         try:
-            data = info.context['srmng'].create_session()
+            data = await info.context['srmng'].create_session()
             return Session(**data)
         except:
             raise GraphQLError('Error creating session')
@@ -143,8 +146,8 @@ class DeleteSession(graphene.Mutation):
     id = graphene.ID()
     async def mutate(self, info:graphene.ResolveInfo, id):
         try:
-            info.context['srmng'].delete_session(id)
-            return DeleteSession(id=id)
+            rid = await info.context['srmng'].delete_session(id)
+            return DeleteSession(id=rid)
         except:
             raise GraphQLError("Error deleting session")
         
@@ -157,11 +160,11 @@ class SelectSamplerate(graphene.Mutation):
     samplerate = graphene.String()
     
     async def mutate(self, info:graphene.ResolveInfo, id, samplerate):
-        try:
-            proc = info.context['srmng'].get_by_id(id)
-            proc.select_samplerate(samplerate)
+        proc = info.context['srmng'].get_by_id(id)
+        resp = await proc.select_samplerate(samplerate)
+        if resp == 'set':
             return SelectSamplerate(id=id, samplerate=samplerate)
-        except:
+        else:
             raise GraphQLError("Error selecting samplerate")
 
 class SelectSample(graphene.Mutation):
@@ -173,11 +176,11 @@ class SelectSample(graphene.Mutation):
     sample = graphene.String()
     
     async def mutate(self, info:graphene.ResolveInfo, id, sample):
-        try:
-            proc = info.context['srmng'].get_by_id(id)
-            proc.select_sample(sample)
+        proc = info.context['srmng'].get_by_id(id)
+        resp = await proc.select_sample(sample)
+        if resp == 'set':
             return SelectSample(id=id, sample=sample)
-        except:
+        else:
             raise GraphQLError("Error selecting sample numbers")
 
 class SrMutation(graphene.ObjectType):
