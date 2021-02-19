@@ -47,54 +47,39 @@ class SrProcessConnection:
         self.sr_task = None
         self.writer = None
         self.reader = None
+        self.session_state = None
+        self.request_queue = {}
         
         self.ws_client = None
         self.ws_clients = dict()
         
-        self.session_state = None
-        self.rx_queue = asyncio.Queue()
-        
-        self.request_queue = {}
-        
     async def sr_conn_task(self):
         self.reader, self.writer = await asyncio.open_unix_connection(tmp_dir + self.id + ".sock")
-        status = await self.reader.read(19)
-        
-        
-        
-        #NOTE HANDSHAKE
-        if status[0] == JSON_PT:
-            data = json.loads(status[1:])
-            await self.rx_queue.put(data['status'])
-            if data['status'] == 'ready':
-        #END HANDSHAKE
-                
-                while True:
-                    response = await self.reader.read(4096)
-                    #print('response', response)
-                    if response:
-                        if response[0] == JSON_PT:
-                            data = json.loads(response[1:])
-                            rid = data.pop('rid')
-                            ev = self.request_queue[rid]['ev']
-                            self.request_queue[rid]['data'] = data
-                            ev.set()
-                            await self.rx_queue.put(data)
-                            
-                        elif response[0] == AUTO_JSON_PT:
-                            data = json.loads(response[1:])
-                            
-                            if "run_session" in data.keys():
-                                self.session_state = data['run_session']
-                                #for client in self.ws_clients.values():
-                                    #await client.send({ 'type':'config', 'sessionRun':self.session_state })
-                                    #await client.ws.send_json({ 'type':'config', 'sessionRun':self.session_state })
-                                await self.ws_client.send_json({ 'type':'config', 'sessionRun':self.session_state })
-                            
-                        elif response[0] == AUTO_BINARY_PT:
-                            print('RX data:', response)
-                    else:
-                        break
+        while True:
+            response = await self.reader.read(4096)
+            #print('RX:', response)
+            if response:
+                if response[0] == JSON_PT:
+                    data = json.loads(response[1:])
+                    rid = data.pop('rid')
+                    ev = self.request_queue[rid]['ev']
+                    self.request_queue[rid]['data'] = data
+                    ev.set()
+                    
+                elif response[0] == AUTO_JSON_PT:
+                    data = json.loads(response[1:])
+                    
+                    if "run_session" in data.keys():
+                        self.session_state = data['run_session']
+                        #for client in self.ws_clients.values():
+                            #await client.send({ 'type':'config', 'sessionRun':self.session_state })
+                            #await client.ws.send_json({ 'type':'config', 'sessionRun':self.session_state })
+                        await self.ws_client.send_json({ 'type':'config', 'sessionRun':self.session_state })
+                    
+                elif response[0] == AUTO_BINARY_PT:
+                    print('RX data:', response)
+            else:
+                break
 
     async def req_send(self, req):
         rid = shortuuid.uuid()
@@ -214,9 +199,7 @@ class SrProcessManager:
             await asyncio.sleep(0)
             
         proc.sr_task = self.loop.create_task(proc.sr_conn_task())
-        status = await proc.rx_queue.get()
-        if status == 'ready':
-            return { 'id':id, 'name': proc.name }
+        return { 'id':id, 'name': proc.name }
     
     def get_by_id(self, id):
         if id in self._procs:
