@@ -18,6 +18,7 @@ class SrWsEndpoint(WebSocketEndpoint):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.proc = None
+        self.id = str(uuid4())
         
     async def on_connect(self, websocket):
         logger.info(f"{bcolors.WARNING}WS connect{bcolors.ENDC}")
@@ -35,18 +36,12 @@ class SrWsEndpoint(WebSocketEndpoint):
         
     async def on_receive(self, websocket, data):
         print('WS data:', data,)
-        #logger.debug(f'{bcolors.WARNING}WS data: %s{bcolors.ENDC}', data)
-        for key in data.keys():
-            if key == 'scale':
-                pass
-                #self.proc.update_scale(data.get('scale'))
-                
-            #elif key == 'x':
-                #self.proc.update_x(data.get('x'))
-                
-            elif key == 'session_run':
-                await self.proc.run_session()
-
+        if 'FOV' in data:
+            await self.proc.ws_clients[self.id].process_fov(data['FOV'])
+        elif 'session_run' in data:
+            await self.proc.run_session()
+        elif 'switch_session_id' in data:
+            pass
         
     async def on_disconnect(self, websocket, close_code):
         logger.info(f"{bcolors.WARNING}WS disconnect{bcolors.ENDC}") 

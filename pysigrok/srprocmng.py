@@ -6,6 +6,7 @@ from fastapi.logger import logger
 from uuid import uuid4
 from subprocess import Popen
 import zipfile, configparser, time, json, os
+import shortuuid
 
 tmp_dir = '/tmp/webrok/'
 
@@ -42,7 +43,7 @@ class SrProcessConnection:
     def __init__(self, id, name):
         self.id = id
         self.name = name #Session name
-        self.sr_proc = Popen(["/home/drjacka/sigrok-proc/src/srproc", "-u", tmp_dir + self.id + ".sock"])
+        self.sr_proc = Popen(["/home/drjacka/fastapi/webrok/sigrok-proc/src/srproc", "-u", tmp_dir + self.id + ".sock"])
         self.sr_task = None
         self.writer = None
         self.reader = None
@@ -53,22 +54,28 @@ class SrProcessConnection:
         self.session_state = None
         self.rx_queue = asyncio.Queue()
         
+        self.request_queue = {}
+        
     async def sr_conn_task(self):
         self.reader, self.writer = await asyncio.open_unix_connection(tmp_dir + self.id + ".sock")
         status = await self.reader.read(19)
+        
         #NOTE HANDSHAKE
-        if status[0] == JSON_PT:
+        if status[0] == JSON_PT: #ATTENTION CHANGE TO AUTO_JSON_PT
             data = json.loads(status[1:])
-            print(data)
             await self.rx_queue.put(data['status'])
             if data['status'] == 'ready':
         #END HANDSHAKE
+        
                 while True:
                     response = await self.reader.read(4096)
                     if response:
-                        
                         if response[0] == JSON_PT:
                             data = json.loads(response[1:])
+                            rid = data.pop('rid')
+                            ev = self.request_queue[rid]['ev']
+                            self.request_queue[rid]['data'] = data
+                            ev.set()
                             await self.rx_queue.put(data)
                             
                         elif response[0] == AUTO_JSON_PT:
@@ -76,10 +83,10 @@ class SrProcessConnection:
                             
                             if "run_session" in data.keys():
                                 self.session_state = data['run_session']
-                                for client in self.ws_clients.values():
+                                #for client in self.ws_clients.values():
                                     #await client.send({ 'type':'config', 'sessionRun':self.session_state })
-                                    await client.ws.send_json({ 'type':'config', 'sessionRun':self.session_state })
-                                #await self.ws_client.send_json({ 'type':'config', 'sessionRun':self.session_state })
+                                    #await client.ws.send_json({ 'type':'config', 'sessionRun':self.session_state })
+                                await self.ws_client.send_json({ 'type':'config', 'sessionRun':self.session_state })
                             
                         elif response[0] == AUTO_BINARY_PT:
                             print('RX data:', response)
@@ -87,18 +94,33 @@ class SrProcessConnection:
                         break
     
     async def update_session_state(self):
-        tx_data = {'get':['session_state']}
+        
+        rid = shortuuid.uuid()
+        
+        tx_data = {'get':['session_state'], 'rid':rid}
         msg = json.dumps(tx_data)
         self.writer.write(msg.encode())
         await self.writer.drain()
-        data = await self.rx_queue.get()
+        
+        ev = asyncio.Event()
+        self.request_queue.update( { rid : {}} )
+        self.request_queue[rid]['ev'] = ev
+        self.request_queue[rid]['data'] = None
+        await ev.wait()
+        data = self.request_queue[rid].get('data')
+        del self.request_queue[rid]
+        
+        
+        
+        
+        
         self.session_state = int(data['get']['session_state'])
         #print("get_session_state:", self.session_state)
         
-        for client in self.ws_clients.values():
+        #for client in self.ws_clients.values():
             #await client.send({ 'type':'config', 'sessionRun':self.session_state })
-            await client.ws.send_json({ 'type':'config', 'sessionRun':self.session_state })
-        #await self.ws_client.send_json({ 'type':'config', 'sessionRun':self.session_state })
+            #await client.ws.send_json({ 'type':'config', 'sessionRun':self.session_state })
+        await self.ws_client.send_json({ 'type':'config', 'sessionRun':self.session_state })
     
     async def get_channels(self):
         tx_data = {'get':['channels']}
@@ -130,19 +152,43 @@ class SrProcessConnection:
         return data['get']
             
     async def get_drivers(self):
-        tx_data = {'get':['drivers']}
+        
+        rid = shortuuid.uuid()
+        
+        tx_data = {'get':['drivers'], 'rid': rid}
         msg = json.dumps(tx_data)
         self.writer.write(msg.encode())
         await self.writer.drain()
-        data = await self.rx_queue.get()
+        
+        ev = asyncio.Event()
+        self.request_queue.update( { rid : {}} )
+        self.request_queue[rid]['ev'] = ev
+        self.request_queue[rid]['data'] = None
+        await ev.wait()
+        data = self.request_queue[rid].get('data')
+        del self.request_queue[rid]
+        
         return data['get']['drivers']
         
     async def get_session(self):
-        tx_data = {'get':['session']}
+        
+        rid = shortuuid.uuid()
+        
+        tx_data = {'get':['session'], 'rid':rid}
         msg = json.dumps(tx_data)
         self.writer.write(msg.encode())
         await self.writer.drain()
-        data = await self.rx_queue.get()
+        
+        
+        ev = asyncio.Event()
+        self.request_queue.update( { rid : {}} )
+        self.request_queue[rid]['ev'] = ev
+        self.request_queue[rid]['data'] = None
+        await ev.wait()
+        data = self.request_queue[rid].get('data')
+        del self.request_queue[rid]
+
+        
         session = dict(data['get']['session'])
         session.update({'id':self.id, 'name':self.name})
         return session
