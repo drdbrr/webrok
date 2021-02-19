@@ -60,15 +60,18 @@ class SrProcessConnection:
         self.reader, self.writer = await asyncio.open_unix_connection(tmp_dir + self.id + ".sock")
         status = await self.reader.read(19)
         
+        
+        
         #NOTE HANDSHAKE
-        if status[0] == JSON_PT: #ATTENTION CHANGE TO AUTO_JSON_PT
+        if status[0] == JSON_PT:
             data = json.loads(status[1:])
             await self.rx_queue.put(data['status'])
             if data['status'] == 'ready':
         #END HANDSHAKE
-        
+                
                 while True:
                     response = await self.reader.read(4096)
+                    #print('response', response)
                     if response:
                         if response[0] == JSON_PT:
                             data = json.loads(response[1:])
@@ -92,16 +95,13 @@ class SrProcessConnection:
                             print('RX data:', response)
                     else:
                         break
-    
-    async def update_session_state(self):
-        
+
+    async def req_send(self, req):
         rid = shortuuid.uuid()
-        
-        tx_data = {'get':['session_state'], 'rid':rid}
-        msg = json.dumps(tx_data)
+        req.update({'rid': rid})
+        msg = json.dumps(req)
         self.writer.write(msg.encode())
         await self.writer.drain()
-        
         ev = asyncio.Event()
         self.request_queue.update( { rid : {}} )
         self.request_queue[rid]['ev'] = ev
@@ -109,13 +109,11 @@ class SrProcessConnection:
         await ev.wait()
         data = self.request_queue[rid].get('data')
         del self.request_queue[rid]
-        
-        
-        
-        
-        
+        return data
+    
+    async def update_session_state(self):
+        data = await self.req_send({'get':['session_state']})
         self.session_state = int(data['get']['session_state'])
-        #print("get_session_state:", self.session_state)
         
         #for client in self.ws_clients.values():
             #await client.send({ 'type':'config', 'sessionRun':self.session_state })
@@ -123,11 +121,7 @@ class SrProcessConnection:
         await self.ws_client.send_json({ 'type':'config', 'sessionRun':self.session_state })
     
     async def get_channels(self):
-        tx_data = {'get':['channels']}
-        msg = json.dumps(tx_data)
-        self.writer.write(msg.encode())
-        await self.writer.drain()
-        data = await self.rx_queue.get()
+        data = await self.req_send({'get':['channels']})
         col_num = 0
         for chg in data['get']['channels'].values():
             for ch in chg:
@@ -136,69 +130,25 @@ class SrProcessConnection:
         return data['get']['channels']
             
     async def get_sample(self):
-        tx_data = {'get':['sample', 'samples']}
-        msg = json.dumps(tx_data)
-        self.writer.write(msg.encode())
-        await self.writer.drain()
-        data = await self.rx_queue.get()
+        data = await self.req_send({'get':['sample', 'samples']})
         return data['get']
             
     async def get_samplerate(self):
-        tx_data = {'get':['samplerate', 'samplerates']}
-        msg = json.dumps(tx_data)
-        self.writer.write(msg.encode())
-        await self.writer.drain()
-        data = await self.rx_queue.get()
+        data = await self.req_send({'get':['samplerate', 'samplerates']})
         return data['get']
             
     async def get_drivers(self):
-        
-        rid = shortuuid.uuid()
-        
-        tx_data = {'get':['drivers'], 'rid': rid}
-        msg = json.dumps(tx_data)
-        self.writer.write(msg.encode())
-        await self.writer.drain()
-        
-        ev = asyncio.Event()
-        self.request_queue.update( { rid : {}} )
-        self.request_queue[rid]['ev'] = ev
-        self.request_queue[rid]['data'] = None
-        await ev.wait()
-        data = self.request_queue[rid].get('data')
-        del self.request_queue[rid]
-        
+        data = await self.req_send({'get':['drivers']})
         return data['get']['drivers']
         
     async def get_session(self):
-        
-        rid = shortuuid.uuid()
-        
-        tx_data = {'get':['session'], 'rid':rid}
-        msg = json.dumps(tx_data)
-        self.writer.write(msg.encode())
-        await self.writer.drain()
-        
-        
-        ev = asyncio.Event()
-        self.request_queue.update( { rid : {}} )
-        self.request_queue[rid]['ev'] = ev
-        self.request_queue[rid]['data'] = None
-        await ev.wait()
-        data = self.request_queue[rid].get('data')
-        del self.request_queue[rid]
-
-        
+        data = await self.req_send({'get':['session']})
         session = dict(data['get']['session'])
         session.update({'id':self.id, 'name':self.name})
         return session
     
     async def select_device(self, devNum):
-        tx_data = {'set':{'dev_num':devNum}}
-        msg = json.dumps(tx_data)
-        self.writer.write(msg.encode())
-        await self.writer.drain()
-        data = await self.rx_queue.get()
+        data = await self.req_send({'set':{'dev_num':devNum}})
         if data['set']['dev_num'] == 'set':
             session = await self.get_session()
             return session
@@ -206,43 +156,23 @@ class SrProcessConnection:
             return {}
     
     async def scan_devices(self, drv):
-        tx_data = {'set':{'driver':drv}}
-        msg = json.dumps(tx_data)
-        self.writer.write(msg.encode())
-        await self.writer.drain()
-        data = await self.rx_queue.get()
-        if data['set']['driver'] == 'set':
-            tx_data = {'get':['scan']}
-            msg = json.dumps(tx_data)
-            self.writer.write(msg.encode())
-            await self.writer.drain()
-            data = await self.rx_queue.get()
+        req = await self.req_send({'set':{'driver':drv}})
+        if req['set']['driver'] == 'set':
+            data = await self.req_send({'get':['scan']})
             return data['get']['scan']
         else:
             return []
         
     async def select_sample(self, sample):
-        tx_data = {'set':{'sample':int(sample)}}
-        msg = json.dumps(tx_data)
-        self.writer.write(msg.encode())
-        await self.writer.drain()
-        data = await self.rx_queue.get()
+        data = await self.req_send({'set':{'sample':int(sample)}})
         return data['set']['sample']
     
     async def select_samplerate(self, samplerate):
-        tx_data = {'set':{'samplerate':int(samplerate)}}
-        msg = json.dumps(tx_data)
-        self.writer.write(msg.encode())
-        await self.writer.drain()
-        data = await self.rx_queue.get()
+        data = await self.req_send({'set':{'samplerate':int(samplerate)}})
         return data['set']['samplerate']
     
     async def run_session(self):
-        tx_data = {'set':{'run_session':int(self.session_state)}} # VALUE NO MATTERS
-        msg = json.dumps(tx_data)
-        self.writer.write(msg.encode())
-        await self.writer.drain()
-        data = await self.rx_queue.get()
+        data = await self.req_send({'set':{'run_session':int(self.session_state)}})
         self.session_state = data['set']['run_session']
         await self.ws_client.send_json({ 'type':'config', 'sessionRun':self.session_state })
         

@@ -98,6 +98,8 @@ class SrQuery(graphene.ObjectType):
         return [ DeviceInfo(**item) for item in data ]
     
     async def resolve_drivers(self, info:graphene.ResolveInfo):
+        #srmngg = info.context['request'].scope.get('srmngg')
+        #print(srmngg)
         try:
             id = next(iter(info.context['srmng']._procs))
             proc = info.context['srmng'].get_by_id(id)

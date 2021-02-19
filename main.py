@@ -41,6 +41,8 @@ class SrMngMiddleware:
     async def __call__(self, scope: Scope, receive: Receive, send: Send):
         if scope["type"] == "websocket":
             scope["srmng"] = self.srmng
+        #elif scope["type"] == "http":
+            #scope["srmngg"] = self.srmng
         await self._app(scope, receive, send)
 
 routes=[WebSocketRoute('/srsocket', SrWsEndpoint)]
