@@ -6,3 +6,4 @@ starlette==0.13.6
 websockets
 aiofiles
 graphene-2.1.8
+shortuuid
