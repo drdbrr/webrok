@@ -25,10 +25,10 @@ class SrWsEndpoint(WebSocketEndpoint):
         await websocket.accept()
         data = await websocket.receive_json()
         self.proc = self.scope['srmng'].get_by_id(data['id'])
-        self.proc.ws_client = websocket
-        
+        #self.proc.ws_client = websocket
         testWsHandler = TestWsHandler(websocket)
-        self.proc.ws_clients.update({ str(uuid4()) : testWsHandler })
+        self.proc.ws_clients[self.id] = testWsHandler
+        #self.proc.ws_clients.update({ self.id : testWsHandler })
         
         await self.proc.update_session_state()
         
@@ -40,8 +40,7 @@ class SrWsEndpoint(WebSocketEndpoint):
             await self.proc.ws_clients[self.id].process_fov(data['FOV'])
         elif 'session_run' in data:
             await self.proc.run_session()
-        elif 'switch_session_id' in data:
-            pass
         
     async def on_disconnect(self, websocket, close_code):
+        del self.proc.ws_clients[self.id]
         logger.info(f"{bcolors.WARNING}WS disconnect{bcolors.ENDC}") 

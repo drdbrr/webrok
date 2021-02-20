@@ -57,7 +57,7 @@ class SrProcessConnection:
         self.reader, self.writer = await asyncio.open_unix_connection(tmp_dir + self.id + ".sock")
         while True:
             response = await self.reader.read(4096)
-            #print('RX:', response)
+            #print('SRV-RX:', response)
             if response:
                 if response[0] == JSON_PT:
                     data = json.loads(response[1:])
@@ -71,10 +71,9 @@ class SrProcessConnection:
                     
                     if "run_session" in data.keys():
                         self.session_state = data['run_session']
-                        #for client in self.ws_clients.values():
+                        for client in self.ws_clients.values():
                             #await client.send({ 'type':'config', 'sessionRun':self.session_state })
-                            #await client.ws.send_json({ 'type':'config', 'sessionRun':self.session_state })
-                        await self.ws_client.send_json({ 'type':'config', 'sessionRun':self.session_state })
+                            await client.ws.send_json({ 'type':'config', 'sessionRun':self.session_state })
                     
                 elif response[0] == AUTO_BINARY_PT:
                     print('RX data:', response)
@@ -100,10 +99,8 @@ class SrProcessConnection:
         data = await self.req_send({'get':['session_state']})
         self.session_state = int(data['get']['session_state'])
         
-        #for client in self.ws_clients.values():
-            #await client.send({ 'type':'config', 'sessionRun':self.session_state })
-            #await client.ws.send_json({ 'type':'config', 'sessionRun':self.session_state })
-        await self.ws_client.send_json({ 'type':'config', 'sessionRun':self.session_state })
+        for client in self.ws_clients.values():
+            await client.ws.send_json({ 'type':'config', 'sessionRun':self.session_state })
     
     async def get_channels(self):
         data = await self.req_send({'get':['channels']})
@@ -159,7 +156,9 @@ class SrProcessConnection:
     async def run_session(self):
         data = await self.req_send({'set':{'run_session':int(self.session_state)}})
         self.session_state = data['set']['run_session']
-        await self.ws_client.send_json({ 'type':'config', 'sessionRun':self.session_state })
+        
+        for client in self.ws_clients.values():
+            await client.ws.send_json({ 'type':'config', 'sessionRun':self.session_state })
         
     def stop(self):
         self.sr_proc.kill()
@@ -199,6 +198,7 @@ class SrProcessManager:
             await asyncio.sleep(0)
             
         proc.sr_task = self.loop.create_task(proc.sr_conn_task())
+        
         return { 'id':id, 'name': proc.name }
     
     def get_by_id(self, id):
