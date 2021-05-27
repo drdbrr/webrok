@@ -62,10 +62,11 @@ async def startup_event():
         
 @app.on_event("shutdown")
 async def shutdown_event():
-    try:
-        shutil.rmtree(tmp_dir)
-    except:
-        print('App.shutdown error')
+    shutil.rmtree(tmp_dir)
+    for proc in srProcessManager._procs.values():
+        proc.sr_proc.kill()
+        proc.protocol.close()
+        
 
 @app.get("/", include_in_schema=False, response_class=HTMLResponse)
 async def root():

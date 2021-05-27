@@ -1,7 +1,8 @@
 from fastapi.logger import logger
 from starlette.endpoints import WebSocketEndpoint
 from uuid import uuid4
-from .srprocmng import TestWsHandler
+import asyncio
+from .srprocmng import WsHandler
 
 class bcolors:
     HEADER = '\033[95m'
@@ -19,27 +20,36 @@ class SrWsEndpoint(WebSocketEndpoint):
         super().__init__(*args, **kwargs)
         self.proc = None
         self.id = str(uuid4())
+        self.wsHandler = None
         
     async def on_connect(self, websocket):
         logger.info(f"{bcolors.WARNING}WS connect{bcolors.ENDC}")
         await websocket.accept()
         data = await websocket.receive_json()
         self.proc = self.scope['srmng'].get_by_id(data['id'])
-        #self.proc.ws_client = websocket
-        testWsHandler = TestWsHandler(websocket)
-        self.proc.ws_clients[self.id] = testWsHandler
-        #self.proc.ws_clients.update({ self.id : testWsHandler })
-        
+        self.wsHandler = WsHandler(websocket, self.proc)
+        self.proc.ws_clients[self.id] = self.wsHandler
         await self.proc.update_session_state()
         
-        logger.info(f"{bcolors.WARNING}WS accepted id: %s {bcolors.ENDC}", id)
         
     async def on_receive(self, websocket, data):
-        print('WS data:', data,)
-        if 'FOV' in data:
-            await self.proc.ws_clients[self.id].process_fov(data['FOV'])
-        elif 'session_run' in data:
-            await self.proc.run_session()
+        #print('WS data:', data)
+        if 'session_run' in data:
+            self.wsHandler.init_a()
+            await self.proc.run_session(data['session_run'], self.id)
+        elif 'channel' in data:
+            await self.proc.update_channel(data)
+            
+        elif 'scale' in data:
+            scale = data['scale']
+            self.wsHandler.mesh_width *= scale
+            self.wsHandler.scale = scale
+            print('mesh:', self.wsHandler.mesh_width, ' scale:', self.wsHandler.scale)
+            
+        elif 'x' in data:
+            x = data['x']
+            self.wsHandler.mesh_width -= x
+            print(self.wsHandler.mesh_width)
         
     async def on_disconnect(self, websocket, close_code):
         del self.proc.ws_clients[self.id]

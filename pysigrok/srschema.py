@@ -9,6 +9,45 @@ import time
 
 #---------TYPES---------#
 
+
+#--------BEGIN PD--------#
+class DecoderOptions(graphene.ObjectType):
+    id = graphene.String(default_value='')
+    desc = graphene.String(default_value='')
+    type = graphene.String(default_value='')
+    defv = graphene.String(default_value='')
+    values = graphene.List(graphene.String)#, default_value = [])
+    
+class DecoderAnnotationRow(graphene.ObjectType):
+    id = graphene.String(default_value='')
+    desc = graphene.String(default_value='')
+    #ann_classes = graphene.List(graphene.Int)
+    
+#ATTENTION нужен ли данный тип??????
+#class DecoderAnnotations(graphene.ObjectType):
+    #key = graphene.String(default_value='')
+    #text = graphene.String(default_value='')
+    
+class SrdChannel(graphene.ObjectType):
+    id = graphene.String()
+    name = graphene.String()
+    desc = graphene.String()
+
+class Decoder(graphene.ObjectType):
+    id = graphene.String()
+    name = graphene.String()
+    longname = graphene.String()
+    desc = graphene.String()
+    license = graphene.String()
+    tags = graphene.List(graphene.String, default_value = [])
+    doc = graphene.String()#ATTENTION
+    options = graphene.List(DecoderOptions)
+    annotationRows = graphene.List(DecoderAnnotationRow)
+    channels = graphene.List(SrdChannel)
+    optChannels = graphene.List(SrdChannel)
+#--------END PD--------#
+    
+
 class Sample(graphene.ObjectType):
     samples = graphene.List(graphene.String, default_value = [])
     sample = graphene.String(default_value='')
@@ -54,9 +93,20 @@ class AnalogChannel(graphene.ObjectType):
     convThres = graphene.String(default_value='')
     showTraces = graphene.String(default_value='')
     
+class DecoderChannel(graphene.ObjectType):
+    name = graphene.String()
+    stackName = graphene.String()
+    
 class Channels(graphene.ObjectType):
     logic = graphene.List(LogicChannel)
     analog = graphene.List(AnalogChannel)
+    
+
+class Driver(graphene.ObjectType):
+    driverName = graphene.String(default_value='')
+    vendor = graphene.String(default_value='')
+    model = graphene.String(default_value='')
+    connectionId = graphene.String(default_value='')
 
 #---------QUERIES---------#
 class SrQuery(graphene.ObjectType):
@@ -68,6 +118,13 @@ class SrQuery(graphene.ObjectType):
     sample = graphene.Field(Sample, id=graphene.ID(required=True))
     
     getChannels = graphene.Field(Channels, id=graphene.ID(required=True))
+    
+    decodersList = graphene.List(Decoder, default_value = [], id=graphene.ID(required=True))
+    
+    async def resolve_decodersList(self, info:graphene.ResolveInfo, id):
+        proc = info.context['srmng'].get_by_id(id)
+        data = await proc.get_decoders_list()
+        return [ Decoder(**item) for item in data ]
     
     async def resolve_getChannels(self, info:graphene.ResolveInfo, id):
         proc = info.context['srmng'].get_by_id(id)
@@ -118,6 +175,22 @@ class SrQuery(graphene.ObjectType):
         return Session(**data)
 
 #---------MUTATIONS---------#
+class SelectDecoder(graphene.Mutation):
+    class Arguments:
+        id = graphene.ID(required=True)
+        pdId = graphene.String(required=True)
+        
+    Output = Decoder
+    
+    async def mutate(self, info:graphene.ResolveInfo, id, pdId):
+        try:
+            proc = info.context['srmng'].get_by_id(id)
+            data = await proc.register_pd(pdId)
+            return Decoder(**data)
+        except:
+            raise GraphQLError('Error register PD')
+
+
 class SelectDevice(graphene.Mutation):
     class Arguments:
         id = graphene.ID(required=True)
@@ -191,3 +264,4 @@ class SrMutation(graphene.ObjectType):
     selectDevice = SelectDevice.Field()
     selectSamplerate = SelectSamplerate.Field()
     selectSample = SelectSample.Field()
+    selectDecoder = SelectDecoder.Field()
