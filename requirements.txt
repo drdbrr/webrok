@@ -2,8 +2,8 @@ fastapi
 python-multipart
 uvicorn
 uvloop
-starlette==0.13.6
+starlette
 websockets
 aiofiles
-graphene-2.1.8
+ariadne
 shortuuid

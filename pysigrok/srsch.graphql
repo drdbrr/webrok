@@ -1,0 +1,164 @@
+type Query {
+    sessions: [SessionEntry]
+    session(id: ID!): Session
+    drivers: [String]
+    decodersList(id: ID): [Decoder]
+    scanDevices(id: ID, drv: String): [DeviceInfo]
+    options(id: ID!, opts: [ConfKey]): [Option]
+    channelsList(id: ID): [Channel]
+}
+
+type Mutation {
+    selectDevice(id: ID!, devNum: Int): Session
+    createSession: Session
+    deleteSession(id: ID!): ID
+    setOption(id: ID!, opt: ConfKey, value: String): SetOptionPayload
+    setOptions(id: ID!, input: [OptsInput!]): SetOptionPayload
+    setChannelOptions(id: ID!, input: [ChanOpt!]): SetChannelPayload
+}
+
+input OptsInput{
+    key: String
+    value: String
+}
+
+type SessionEntry {
+    id: String
+    name: String
+}
+
+type SetChannelPayload {
+    success: Boolean!
+    error: String
+    msg: [String]
+}
+
+type SetOptionPayload {
+    success: Boolean
+    error: String
+    option: Option
+}
+
+interface Option {
+    id: ID
+    keyName: String
+    caps: [String]
+}
+
+type EmptyOpt implements Option {
+    id: ID
+    keyName: String
+    caps: [String]
+}
+
+type ValueOpt implements Option {
+    id: ID
+    caps: [String]
+    value: String
+    keyName: String
+}
+
+type ListOpt implements Option {
+    id: ID
+    caps: [String]
+    values: [String]
+    keyName: String
+}
+
+type VlOpt implements Option {
+    id: ID
+    caps: [String]
+    value: String
+    values: [String]
+    keyName: String
+}
+
+interface Session {
+    id: ID!
+    name: String!
+    sourcename: String
+}
+
+type BlankSession implements Session {
+    id: ID!
+    name: String!
+    sourcename: String
+}
+
+type DeviceSession implements Session {
+    id: ID!
+    name: String!
+    sourcename: String
+    
+    drvopts: [ConfKey]
+    devopts: [ConfKey]
+    channels: [String]
+}
+
+input ChanOpt{
+    chName: String!
+    text: String
+    color: String
+    enabled: Boolean
+    traceHeight: Int
+    pVertDivs: Int
+    nVertDivs: Int
+    divHeight: Int
+    vRes: Float
+    autoranging: Boolean
+    conversion: String
+    convThres: String
+    showTraces: String
+}
+
+interface Channel {
+    name: String
+    text: String
+    color: String
+    enabled: Boolean
+    index: Int
+    type: String
+}
+
+type LogicChannel implements Channel {
+    name: String
+    text: String
+    color: String
+    enabled: Boolean
+    index: Int
+    type: String
+    traceHeight: Int
+}
+
+type AnalogChannel implements Channel {
+    name: String
+    text: String
+    color: String
+    enabled: Boolean
+    index: Int
+    type: String
+    pVertDivs: Int
+    nVertDivs: Int
+    divHeight: Int
+    vRes: Float
+    autoranging: Boolean
+    conversion: String
+    convThres: String
+    showTraces: String
+}
+
+type Decoder{
+    id: ID
+    name: String
+    longname: String
+    desc: String
+    tags: String
+    doc: String
+}
+
+type DeviceInfo{
+    vendor: String
+    model: String
+    driverName: String
+    connectionId: String
+} 

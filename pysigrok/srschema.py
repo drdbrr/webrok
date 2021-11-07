@@ -1,267 +1,127 @@
-import graphene
-from graphql import GraphQLError
-import time
+from ariadne import  make_executable_schema, QueryType, ObjectType, InterfaceType, MutationType, EnumType, load_schema_from_path
+from sigrok.core.classes import ConfigKey
+from .srtypes import SrDeviceState, SrBlankState
+from .srresolver import srResolver
+from sigrok.core.classes import get_drivers
 
-#---------API---------#
-# info.context['srmng'] = SrProcessManager: create_session:id, delete_session(id), get_sessions:[id], get_drivers:[drv], get_by_id(id):proc, get_session(id):{params}
-# SrProcessConnection: scan_devices(drv):[devices], select_device(num):{params}
-#---------API---------#
+type_defs = load_schema_from_path("./")
+enum_defs = "enum ConfKey {" + " ".join(str(e) for e in ConfigKey.values()) + "}"
 
-#---------TYPES---------#
+query = QueryType()
+mutation = MutationType()
+sessionType = InterfaceType('Session')
+channelType = InterfaceType('Channel')
+optionType = InterfaceType('Option')
 
+confDict = { item.name: item.id for item in ConfigKey.values() }
+confEnumType = EnumType('ConfKey', confDict)
 
-#--------BEGIN PD--------#
-class DecoderOptions(graphene.ObjectType):
-    id = graphene.String(default_value='')
-    desc = graphene.String(default_value='')
-    type = graphene.String(default_value='')
-    defv = graphene.String(default_value='')
-    values = graphene.List(graphene.String)#, default_value = [])
-    
-class DecoderAnnotationRow(graphene.ObjectType):
-    id = graphene.String(default_value='')
-    desc = graphene.String(default_value='')
-    #ann_classes = graphene.List(graphene.Int)
-    
-#ATTENTION нужен ли данный тип??????
-#class DecoderAnnotations(graphene.ObjectType):
-    #key = graphene.String(default_value='')
-    #text = graphene.String(default_value='')
-    
-class SrdChannel(graphene.ObjectType):
-    id = graphene.String()
-    name = graphene.String()
-    desc = graphene.String()
+#---------QUERIES----------
+@query.field("channelsList")
+async def resolve_channel(mng, info, id):
+    proc = mng.get_by_id(id)
+    data = proc._state.channels.get()
+    return data
 
-class Decoder(graphene.ObjectType):
-    id = graphene.String()
-    name = graphene.String()
-    longname = graphene.String()
-    desc = graphene.String()
-    license = graphene.String()
-    tags = graphene.List(graphene.String, default_value = [])
-    doc = graphene.String()#ATTENTION
-    options = graphene.List(DecoderOptions)
-    annotationRows = graphene.List(DecoderAnnotationRow)
-    channels = graphene.List(SrdChannel)
-    optChannels = graphene.List(SrdChannel)
-#--------END PD--------#
-    
+@channelType.type_resolver
+async def resolve_channel_type(obj, *_):
+    if obj['type'] == 'analog':
+        return 'AnalogChannel'
+    if obj['type'] == 'logic':
+        return 'LogicChannel'
+    return None
 
-class Sample(graphene.ObjectType):
-    samples = graphene.List(graphene.String, default_value = [])
-    sample = graphene.String(default_value='')
+@query.field("options")
+def resolve_options(mng, info, id, opts):
+    proc = mng.get_by_id(id)
+    data = proc.get_options(opts)
+    return data
 
-class Samplerate(graphene.ObjectType):
-    samplerates = graphene.List(graphene.String, default_value = [])
-    samplerate = graphene.String(default_value='')
+@optionType.type_resolver
+def resolve_option_type(obj, *_):
+    if 'caps' not in obj:
+        return 'EmptyOpt'
+    elif 'GET' in obj['caps'] and not 'LIST' in obj['caps']:
+        return 'ValueOpt'
+    elif 'LIST' in obj['caps'] and not 'GET' in obj['caps']:
+        return 'ListOpt'
+    else:
+        return 'VlOpt'
 
-class DeviceInfo(graphene.ObjectType):
-    vendor = graphene.String(default_value='')
-    model = graphene.String(default_value='')
-    driverName = graphene.String(default_value='')
-    connectionId = graphene.String(default_value='')
-    
-class Session(graphene.ObjectType):
-    id = graphene.ID()
-    type = graphene.String(default_value='')
-    name = graphene.String(default_value='')
-    sourcename = graphene.String(default_value='')
-    config = graphene.List(graphene.NonNull(graphene.String))
-    channels = graphene.List(graphene.NonNull(graphene.String))
+@sessionType.type_resolver
+def resolve_session_type(obj, info, *_):
+    if obj['type'] == 'BLANK':
+        return 'BlankSession'
+    elif obj['type'] == 'DEVICE':
+        return 'DeviceSession'
+    return None
 
-class LogicChannel(graphene.ObjectType):
-    name = graphene.String()
-    text = graphene.String()
-    color = graphene.String()
-    visible = graphene.Boolean(default_value=True)
-    #index = graphene.Int()
-    traceHeight = graphene.Int(default_value=34)
-    
-class AnalogChannel(graphene.ObjectType):
-    name = graphene.String()
-    text = graphene.String()
-    color = graphene.String()
-    visible = graphene.Boolean(default_value=True)
-    #index = graphene.Int()
-    pVertDivs = graphene.Int(default_value=1)
-    nVertDivs = graphene.Int(default_value=1)
-    divHeight = graphene.Int(default_value=50)
-    vRes = graphene.Float(default_value=20.0)
-    autoranging = graphene.Boolean(default_value=True)
-    conversion = graphene.String(default_value='')
-    convThres = graphene.String(default_value='')
-    showTraces = graphene.String(default_value='')
-    
-class DecoderChannel(graphene.ObjectType):
-    name = graphene.String()
-    stackName = graphene.String()
-    
-class Channels(graphene.ObjectType):
-    logic = graphene.List(LogicChannel)
-    analog = graphene.List(AnalogChannel)
-    
+@query.field("session")
+def resolve_session(srmng, info, id):
+    proc = srmng.get_by_id(id)
+    return proc.session_state
 
-class Driver(graphene.ObjectType):
-    driverName = graphene.String(default_value='')
-    vendor = graphene.String(default_value='')
-    model = graphene.String(default_value='')
-    connectionId = graphene.String(default_value='')
+#RESOLVE SESSIONS LIST
+@query.field("sessions")
+async def resolve_sessions(srmng, info):
+    data = srmng.get_sessions()
+    return data
 
-#---------QUERIES---------#
-class SrQuery(graphene.ObjectType):
-    sessions = graphene.List(Session)
-    session = graphene.Field(Session, id=graphene.ID(required=True))
-    drivers = graphene.List(graphene.String, default_value = [])
-    scanDevices = graphene.List(DeviceInfo, id=graphene.ID(required=True), drv=graphene.String(required=True))
-    samplerate = graphene.Field(Samplerate, id=graphene.ID(required=True))
-    sample = graphene.Field(Sample, id=graphene.ID(required=True))
-    
-    getChannels = graphene.Field(Channels, id=graphene.ID(required=True))
-    
-    decodersList = graphene.List(Decoder, default_value = [], id=graphene.ID(required=True))
-    
-    async def resolve_decodersList(self, info:graphene.ResolveInfo, id):
-        proc = info.context['srmng'].get_by_id(id)
-        data = await proc.get_decoders_list()
-        return [ Decoder(**item) for item in data ]
-    
-    async def resolve_getChannels(self, info:graphene.ResolveInfo, id):
-        proc = info.context['srmng'].get_by_id(id)
-        data = await proc.get_channels()
-        analog = []
-        logic=[]
-        for item in data['logic']:
-            logic.append(LogicChannel(**item))
-            
-        for item in data['analog']:
-            analog.append(AnalogChannel(**item))
-        
-        return Channels(analog=analog, logic=logic)
-    
-    async def resolve_sample(self, info:graphene.ResolveInfo, id):
-        proc = info.context['srmng'].get_by_id(id)
-        data = await proc.get_sample()
-        return Sample(**data)
-    
-    async def resolve_samplerate(self, info:graphene.ResolveInfo, id):
-        proc = info.context['srmng'].get_by_id(id)
-        data = await proc.get_samplerate()
-        return Samplerate(**data)
-    
-    async def resolve_scanDevices(self, info:graphene.ResolveInfo, id, drv):
-        proc = info.context['srmng'].get_by_id(id)
-        data = await proc.scan_devices(drv)
-        return [ DeviceInfo(**item) for item in data ]
-    
-    async def resolve_drivers(self, info:graphene.ResolveInfo):
-        #srmngg = info.context['request'].scope.get('srmngg')
-        #print(srmngg)
-        try:
-            id = next(iter(info.context['srmng']._procs))
-            proc = info.context['srmng'].get_by_id(id)
-            data = await proc.get_drivers()
-            return data
-        except:
-            raise GraphQLError('Error getting drivers')
-    
-    async def resolve_sessions(self, info:graphene.ResolveInfo):
-        data = info.context['srmng'].get_sessions()
-        return [ Session(**item) for item in data ]
-    
-    async def resolve_session(self, info:graphene.ResolveInfo, id):
-        proc = info.context['srmng'].get_by_id(id)
-        data = await proc.get_session()
-        return Session(**data)
+@query.field("drivers")
+async def resolve_drivers(srmng, info):
+    #id = next(iter(srmng._procs))
+    #proc = srmng.get_by_id(id)
+    #data = await proc.get_drivers()
+    return get_drivers()
 
-#---------MUTATIONS---------#
-class SelectDecoder(graphene.Mutation):
-    class Arguments:
-        id = graphene.ID(required=True)
-        pdId = graphene.String(required=True)
-        
-    Output = Decoder
+@query.field("decodersList")   
+async def resolve_decoders(_, info, id):
+    #proc = info.context['srmng'].get_by_id(id)
+    #data = await proc.get_decoders_list()
+    return []
+
+@query.field("scanDevices")
+async def resolve_scanDevices(mng, info, id, drv):
+    proc = mng.get_by_id(id)
+    data = await proc.scan_devices(drv)
     
-    async def mutate(self, info:graphene.ResolveInfo, id, pdId):
-        try:
-            proc = info.context['srmng'].get_by_id(id)
-            data = await proc.register_pd(pdId)
-            return Decoder(**data)
-        except:
-            raise GraphQLError('Error register PD')
+    return data
 
+#-------MUTATIONS-------
+#ATTENTION
+@mutation.field("setChannelOptions")
+async def resolve_setChannelOpts(mng, info, id, input: list):
+    proc = mng.get_by_id(id)
+    data = await proc.set_channels_options(input)#TODO
+    return data
 
-class SelectDevice(graphene.Mutation):
-    class Arguments:
-        id = graphene.ID(required=True)
-        devNum = graphene.Int(required=True)
-        
-    Output = Session
-        
-    async def mutate(self, info:graphene.ResolveInfo, id, devNum):
-        try:
-            proc = info.context['srmng'].get_by_id(id)
-            data = await proc.select_device(devNum)
-            return Session(**data)
-        except:
-            raise GraphQLError('Error selecting device')
+#ATTENTION
+@mutation.field("setOptions")
+async def resolve_setOptions(mng, info, id, opts: list):
+    proc = mng.get_by_id(id)
+    data = await proc.set_options(opt, opts)#TODO
+    return data
 
-class CreateSession(graphene.Mutation):
-    Output = Session
-    async def mutate(self, info:graphene.ResolveInfo):
-        try:
-            data = await info.context['srmng'].create_session()
-            return Session(**data)
-        except:
-            raise GraphQLError('Error creating session')
+#@mutation.field("setOption")
+#async def resolve_setOption(_, info, id, opt, value):
+    #proc = info.context['srmng'].get_by_id(id)
+    #data = await proc.set_option(opt, value)
+    #return data
 
-class DeleteSession(graphene.Mutation):
-    class Arguments:
-        id = graphene.ID(required=True)
-    id = graphene.ID()
-    async def mutate(self, info:graphene.ResolveInfo, id):
-        try:
-            rid = await info.context['srmng'].delete_session(id)
-            return DeleteSession(id=rid)
-        except:
-            raise GraphQLError("Error deleting session")
-        
-class SelectSamplerate(graphene.Mutation):
-    class Arguments:
-        id = graphene.ID(required=True)
-        samplerate = graphene.String(required=True)
-        
-    id = graphene.ID()
-    samplerate = graphene.String()
-    
-    async def mutate(self, info:graphene.ResolveInfo, id, samplerate):
-        proc = info.context['srmng'].get_by_id(id)
-        resp = await proc.select_samplerate(samplerate)
-        if resp == 'set':
-            return SelectSamplerate(id=id, samplerate=samplerate)
-        else:
-            raise GraphQLError("Error selecting samplerate")
+@mutation.field("selectDevice")
+async def resolve_selectDevice(mng, info, id, devNum):
+    proc = mng.get_by_id(id)
+    data = await proc.select_device(devNum)
+    return data
 
-class SelectSample(graphene.Mutation):
-    class Arguments:
-        id = graphene.ID(required=True)
-        sample = graphene.String(required=True)
-        
-    id = graphene.ID()
-    sample = graphene.String()
-    
-    async def mutate(self, info:graphene.ResolveInfo, id, sample):
-        proc = info.context['srmng'].get_by_id(id)
-        resp = await proc.select_sample(sample)
-        if resp == 'set':
-            return SelectSample(id=id, sample=sample)
-        else:
-            raise GraphQLError("Error selecting sample numbers")
+@mutation.field("createSession")
+async def resolve_createSession(mng, info):
+    data = await mng.create_session()
+    return data
 
-class SrMutation(graphene.ObjectType):
-    createSession = CreateSession.Field()
-    deleteSession = DeleteSession.Field()
-    selectDevice = SelectDevice.Field()
-    selectSamplerate = SelectSamplerate.Field()
-    selectSample = SelectSample.Field()
-    selectDecoder = SelectDecoder.Field()
+@mutation.field("deleteSession")
+async def resolve_deleteSession(_, info, id):
+    rid = mng.delete_session(id)
+    return rid
+
+srSchema = make_executable_schema([type_defs, enum_defs], [query, mutation, sessionType, channelType, confEnumType, optionType, srResolver])

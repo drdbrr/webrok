@@ -2,7 +2,9 @@ from fastapi.logger import logger
 from starlette.endpoints import WebSocketEndpoint
 from uuid import uuid4
 import asyncio
-from .srprocmng import WsHandler
+from collections import deque
+
+from .srprocmng import srMng
 
 class bcolors:
     HEADER = '\033[95m'
@@ -18,39 +20,58 @@ class SrWsEndpoint(WebSocketEndpoint):
     encoding = 'json'
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.wsid = uuid4()
         self.proc = None
-        self.id = str(uuid4())
-        self.wsHandler = None
+        self.task = None
+        
+        self.x = None
+        self.scale = None
+        self.data_dst = None
+        self.state = None
         
     async def on_connect(self, websocket):
         logger.info(f"{bcolors.WARNING}WS connect{bcolors.ENDC}")
         await websocket.accept()
         data = await websocket.receive_json()
-        self.proc = self.scope['srmng'].get_by_id(data['id'])
-        self.wsHandler = WsHandler(websocket, self.proc)
-        self.proc.ws_clients[self.id] = self.wsHandler
-        await self.proc.update_session_state()
         
+        self.proc = srMng.get_by_id(data['id'])
+        
+        #self.proc = self.scope['srmng'].get_by_id(data['id'])
+        
+        #print('websocket=========>', websocket.url.components)
+        
+        #if len(self.proc.ws_clients) == 0:
+            #self.x = 0
+            #self.scale = 1.0
+            #self.data_dst = deque()
+            #self.state = self.proc._state
+
+        #self.proc.ws_clients.append(websocket)
+        #data = await self.proc.get_run_state()
+        
+        await websocket.send_json({ 'type':'config', 'x':self.x, 'scale':self.scale, 'run':data })
         
     async def on_receive(self, websocket, data):
-        #print('WS data:', data)
-        if 'session_run' in data:
-            self.wsHandler.init_a()
-            await self.proc.run_session(data['session_run'], self.id)
-        elif 'channel' in data:
-            await self.proc.update_channel(data)
+        print('WS RX:', data)
+        
+        if 'run' in data:
+            print("Recv session_run:", data)
+            self.proc.active_ws = websocket
+            resp = await self.proc.set_run_state(data['run'])
+            await websocket.send_json({'type':'config', **resp})
             
         elif 'scale' in data:
-            scale = data['scale']
-            self.wsHandler.mesh_width *= scale
-            self.wsHandler.scale = scale
-            print('mesh:', self.wsHandler.mesh_width, ' scale:', self.wsHandler.scale)
+            self.scale = data['scale']
+            print('scale:', self.scale)
             
         elif 'x' in data:
-            x = data['x']
-            self.wsHandler.mesh_width -= x
-            print(self.wsHandler.mesh_width)
+            self.x = data['x']
+            print('x:', self.x)
+            
+        elif 'cid' in data:
+            cid = data['cid']
+            del self.proc._clients[cid]
         
     async def on_disconnect(self, websocket, close_code):
-        del self.proc.ws_clients[self.id]
+        print('WS DISCONNECT')
         logger.info(f"{bcolors.WARNING}WS disconnect{bcolors.ENDC}") 
