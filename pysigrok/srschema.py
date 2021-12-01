@@ -1,7 +1,6 @@
 from ariadne import  make_executable_schema, QueryType, ObjectType, InterfaceType, MutationType, EnumType, load_schema_from_path
 from sigrok.core.classes import ConfigKey
 from .srtypes import SrDeviceState, SrBlankState
-from .srresolver import srResolver
 from sigrok.core.classes import get_drivers
 from .srprocmng import srMng
 
@@ -109,4 +108,4 @@ async def resolve_deleteSession(srmng, info, id):
     rid = srmng.end_proc(id)
     return { 'id': rid, 'success':True}
 
-srSchema = make_executable_schema([type_defs, enum_defs], [query, mutation, sessionType, channelType, confEnumType, optionType, srResolver ])
+srSchema = make_executable_schema([type_defs, enum_defs], [query, mutation, sessionType, channelType, confEnumType, optionType ])
