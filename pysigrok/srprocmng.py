@@ -75,6 +75,18 @@ class SrProtocol(asyncio.Protocol):
         self.channels = None
         self._state = SrBlankState(self._id, self._name, '')
         
+        
+        self._clients = {}
+    
+    @property
+    def sid(self):
+        return self._id
+    
+    @sid.setter
+    def sid(self):
+        pass
+        
+        
     def connection_made(self, transport):
         loop = asyncio.get_event_loop()
         self.parser = loop.create_task(self.parser_task())
@@ -276,9 +288,10 @@ class SrProtocol(asyncio.Protocol):
         #os.remove(TMP_DIR + self._id + ".sock")
     
     def __del__(self):
+        self.stop()
         print("Stopping session:", self._id)
-#_____________________________________
-
+#-------------------------------------
+        
 
 class SrProcessManager:
     def __init__(self):
@@ -288,7 +301,7 @@ class SrProcessManager:
     def get_sessions(self):
         return [ item.session_state for item in self._procs.values() ]
         
-    async def create_session(self):
+    async def create_proc(self) -> SrProtocol:
         logger.info(f"{bcolors.WARNING}Create SR session{bcolors.ENDC}")
         loop = asyncio.get_event_loop()
         sid = str(uuid4())
@@ -300,15 +313,17 @@ class SrProcessManager:
             
         transport, srProto = await loop.create_unix_connection(lambda: SrProtocol(sid, sr_proc), pth)
         self._procs[sid] = srProto
-        return srProto.session_state
+        return self._procs[sid] #srProto.session_state
     
-    def get_by_id(self, sid = None):
-        return self._procs.get(sid, list(self._procs.values())[0] )
-    
-    def delete_session(self, sid):
+    def end_proc(self, sid: str):
         logger.info(f"{bcolors.WARNING}Delete SR session{bcolors.ENDC}")
-        self._procs[sid].stop()
         del self._procs[sid]
         return sid
+    
+    def get_proc(self, sid: str = None) -> SrProtocol:
+        return self._procs.get(sid, list(self._procs.values())[0] )
+    
+    def sid_exists(self, sid: str) -> bool:
+        return sid in self._procs
         
 srMng = SrProcessManager()

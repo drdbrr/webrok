@@ -20,13 +20,12 @@ class SrWsEndpoint(WebSocketEndpoint):
     encoding = 'json'
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.wsid = uuid4()
         self.proc = None
         self.task = None
-        
         self.x = None
         self.scale = None
         self.data_dst = None
+        
         self.state = None
         
     async def on_connect(self, websocket):
@@ -36,20 +35,11 @@ class SrWsEndpoint(WebSocketEndpoint):
         
         self.proc = srMng.get_by_id(data['id'])
         
-        #self.proc = self.scope['srmng'].get_by_id(data['id'])
+        self.state = self.proc._state.copy()
         
-        #print('websocket=========>', websocket.url.components)
-        
-        #if len(self.proc.ws_clients) == 0:
-            #self.x = 0
-            #self.scale = 1.0
-            #self.data_dst = deque()
-            #self.state = self.proc._state
 
-        #self.proc.ws_clients.append(websocket)
-        #data = await self.proc.get_run_state()
         
-        await websocket.send_json({ 'type':'config', 'x':self.x, 'scale':self.scale, 'run':data })
+        #await websocket.send_json({ 'type':'config', 'x':self.x, 'scale':self.scale, 'run':data })
         
     async def on_receive(self, websocket, data):
         print('WS RX:', data)

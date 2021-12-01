@@ -161,6 +161,9 @@ class SrBlankState:
         data = asdict(self, dict_factory=factory)
         return data
     
+    def copy(self):
+        return self.__class__(self.get())
+    
 @dataclass
 class SrDeviceState(SrBlankState):
     drvopts: Dict[ str, Any ]

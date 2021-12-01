@@ -1,20 +1,23 @@
 type Query {
-    sessions: [SessionEntry]
-    session(id: ID!): Session
+    sessions: Sessions
+    session: Session
     drivers: [String]
-    decodersList(id: ID): [Decoder]
-    scanDevices(id: ID, drv: String): [DeviceInfo]
-    options(id: ID!, opts: [ConfKey]): [Option]
-    channelsList(id: ID): [Channel]
+    decodersList: [Decoder]
+    scanDevices(drv: String): [DeviceInfo]
+    options(opts: [ConfKey]): [Option]
+    chanList: [Channel]
 }
 
 type Mutation {
-    selectDevice(id: ID!, devNum: Int): Session
+    selectDevice(devNum: Int): Session
+    
+    selectSession(id: ID): Session
+    
     createSession: Session
     deleteSession(id: ID!): ID
-    setOption(id: ID!, opt: ConfKey, value: String): SetOptionPayload
-    setOptions(id: ID!, input: [OptsInput!]): SetOptionPayload
-    setChannelOptions(id: ID!, input: [ChanOpt!]): SetChannelPayload
+    setOption(opt: ConfKey, value: String): SetOptionPayload
+    setOptions(input: [OptsInput!]): SetOptionPayload
+    setChannelOptions(input: [ChanOpt!]): SetChannelPayload
 }
 
 input OptsInput{
@@ -22,7 +25,12 @@ input OptsInput{
     value: String
 }
 
-type SessionEntry {
+type Sessions {
+    sesList: [SesItem]
+    session: Session
+}
+
+type SesItem {
     id: String
     name: String
 }

@@ -27,6 +27,7 @@ class SrResolversSetter(SchemaBindable):
 def field_resolver(source: Any, info: GraphQLResolveInfo, **args: Any) -> Any:
     field_name = info.field_name
     
+    #ATTENTION: Custom condition
     if isinstance(source, SrProtocol):
         source = source._state
     
