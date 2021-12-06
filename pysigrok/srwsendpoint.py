@@ -33,9 +33,9 @@ class SrWsEndpoint(WebSocketEndpoint):
         await websocket.accept()
         data = await websocket.receive_json()
         
-        self.proc = srMng.get_by_id(data['id'])
+        #self.proc = srMng.get_by_id(data['id'])
         
-        self.state = self.proc._state.copy()
+        #self.state = self.proc._state.copy()
         
 
         

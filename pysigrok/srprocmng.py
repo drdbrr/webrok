@@ -288,8 +288,9 @@ class SrProtocol(asyncio.Protocol):
         #os.remove(TMP_DIR + self._id + ".sock")
     
     def __del__(self):
-        self.stop()
         print("Stopping session:", self._id)
+        #self.stop()
+        
 #-------------------------------------
         
 
@@ -298,7 +299,7 @@ class SrProcessManager:
         self._procs = {}
         self._tmp_dir = TemporaryDirectory()
         
-    def get_sessions(self):
+    def get_sessions(self) -> list:
         return [ item.session_state for item in self._procs.values() ]
         
     async def create_proc(self) -> SrProtocol:
@@ -315,8 +316,10 @@ class SrProcessManager:
         self._procs[sid] = srProto
         return self._procs[sid] #srProto.session_state
     
-    def end_proc(self, sid: str):
+    def remove_session(self, sid: str):
         logger.info(f"{bcolors.WARNING}Delete SR session{bcolors.ENDC}")
+        proc = self._procs[sid]
+        proc.stop()
         del self._procs[sid]
         return sid
     
@@ -325,5 +328,9 @@ class SrProcessManager:
     
     def sid_exists(self, sid: str) -> bool:
         return sid in self._procs
+        
+    async def new_session(self):
+        proc = await self.create_proc()
+        return proc.session_state
         
 srMng = SrProcessManager()

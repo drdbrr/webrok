@@ -1,5 +1,5 @@
 type Query {
-    sessions: Sessions
+    sessions: [Session]
     session: Session
     drivers: [String]
     decodersList: [Decoder]
@@ -9,12 +9,12 @@ type Query {
 }
 
 type Mutation {
-    selectDevice(devNum: Int): Session
+    selectDevice(devNum: Int!): Session
     
-    selectSession(id: ID): Session
+    selectSession(id: ID!): Session
+    newSession: Session
+    removeSession(id: ID!): RemovePayload
     
-    createSession: Session
-    deleteSession(id: ID!): ID
     setOption(opt: ConfKey, value: String): SetOptionPayload
     setOptions(input: [OptsInput!]): SetOptionPayload
     setChannelOptions(input: [ChanOpt!]): SetChannelPayload
@@ -25,18 +25,13 @@ input OptsInput{
     value: String
 }
 
-type Sessions {
-    sesList: [SesItem]
-    session: Session
-}
-
-type SesItem {
-    id: String
-    name: String
+type RemovePayload {
+    id: ID
+    success: Boolean
 }
 
 type SetChannelPayload {
-    success: Boolean!
+    success: Boolean
     error: String
     msg: [String]
 }

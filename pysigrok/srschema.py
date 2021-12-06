@@ -63,8 +63,9 @@ async def resolve_session(proc, info):
 #RESOLVE SESSIONS LIST
 @query.field("sessions")
 async def resolve_sessions(srmng, info):
-    data = srmng.get_sessions()
-    return { 'sesList': data, 'session': data[0]}
+    #data = srmng.get_sessions()
+    #return { 'sesList': data, 'session': data[0] }
+    return [ proc.session_state for proc in srmng._procs.values() ] 
 
 @query.field("drivers")
 async def resolve_drivers(_, info):
@@ -80,6 +81,11 @@ async def resolve_scanDevices(proc, info, drv):
     return data
 
 #-------MUTATIONS-------
+
+#@mutation.field("createSession")
+#async def resolve_createSession(srmng, info):
+    
+
 #ATTENTION
 @mutation.field("setChannelOptions")
 async def resolve_setChannelOpts(proc, info, input: list):
@@ -98,14 +104,14 @@ async def resolve_selectDevice(proc, info, devNum):
     data = await proc.select_device(devNum)
     return data
 
-@mutation.field("createSession")
-async def resolve_createSession(srmng, info):
-    data = await srmng.create_session()
+@mutation.field("newSession")
+async def resolve_newSession(srmng, info):
+    data = await srmng.new_session()
     return data
 
-@mutation.field("deleteSession")
-async def resolve_deleteSession(srmng, info, id):
-    rid = srmng.end_proc(id)
+@mutation.field("removeSession")
+async def resolve_removeSession(srmng, info, id):
+    rid = srmng.remove_session(id)
     return { 'id': rid, 'success':True}
 
 srSchema = make_executable_schema([type_defs, enum_defs], [query, mutation, sessionType, channelType, confEnumType, optionType ])
